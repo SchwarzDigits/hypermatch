@@ -1,4 +1,4 @@
-module github.com/SchwarzIT/hypermatch
+module github.com/SchwarzDigits/hypermatch
 
 go 1.21.0
 

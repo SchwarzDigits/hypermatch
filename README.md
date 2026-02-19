@@ -1,10 +1,10 @@
 [![SIT](https://img.shields.io/badge/SIT-awesome-blueviolet.svg)](https://jobs.schwarz)
-[![CI](https://github.com/SchwarzIT/hypermatch/actions/workflows/go-test.yml/badge.svg)](https://github.com/SchwarzIT/hypermatch/actions/workflows/go-test.yml)
-[![Coverage Status](https://coveralls.io/repos/github/SchwarzIT/hypermatch/badge.svg?branch=main)](https://coveralls.io/github/SchwarzIT/hypermatch?branch=main)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SchwarzIT/hypermatch)](https://goreportcard.com/report/github.com/SchwarzIT/hypermatch)
-[![Go Reference](https://pkg.go.dev/badge/github.com/schwarzit/hypermatch.svg)](https://pkg.go.dev/github.com/schwarzit/hypermatch)
-![License](https://img.shields.io/github/license/SchwarzIT/hypermatch)
-![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/SchwarzIT/hypermatch)
+[![CI](https://github.com/SchwarzDigits/hypermatch/actions/workflows/go-test.yml/badge.svg)](https://github.com/SchwarzDigits/hypermatch/actions/workflows/go-test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/SchwarzDigits/hypermatch/badge.svg?branch=main)](https://coveralls.io/github/SchwarzDigits/hypermatch?branch=main)
+[![Go Report Card](https://goreportcard.com/badge/github.com/SchwarzDigits/hypermatch)](https://goreportcard.com/report/github.com/SchwarzDigits/hypermatch)
+[![Go Reference](https://pkg.go.dev/badge/github.com/schwarzdigits/hypermatch.svg)](https://pkg.go.dev/github.com/schwarzdigits/hypermatch)
+![License](https://img.shields.io/github/license/SchwarzDigits/hypermatch)
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/SchwarzDigits/hypermatch)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)  
 
 ![hypermatch logo](./logo/logo-small.png)
@@ -24,7 +24,7 @@ An event consists of a list of fields, provided as name/value pairs. A rule link
 
 ```go
 import (
-    hypermatch "github.com/SchwarzIT/hypermatch"
+    hypermatch "github.com/SchwarzDigits/hypermatch"
 )
 
 func main() {
