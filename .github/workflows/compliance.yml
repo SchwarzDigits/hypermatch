@@ -8,4 +8,4 @@ on:
 
 jobs:
   compliance:
-    uses: SchwarzDigits/oss-compliance/.github/workflows/full-check.yml@main
+    uses: SchwarzDigits/oss-compliance/.github/workflows/full-check.yml@v1
