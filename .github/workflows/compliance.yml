@@ -1,0 +1,11 @@
+name: Compliance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  compliance:
+    uses: SchwarzDigits/oss-compliance/.github/workflows/full-check.yml@main
