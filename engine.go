@@ -5,6 +5,7 @@ import (
 	"hash/maphash"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 // Rules are stored in a trie whose edges are normalized conditions. A rule
@@ -21,7 +22,30 @@ type trie struct {
 type state struct {
 	groups strMap[*group] // outgoing conditions, by path
 	glist  list[*group]   // the same groups, for iteration
-	rules  list[uint32]   // numbers of the rules ending here
+	rule   atomic.Uint32  // 1 + number of the first rule ending here, or 0
+	rules  list[uint32]   // numbers of further rules ending here
+}
+
+// addRule records that rule num ends in s. Writer only.
+func (s *state) addRule(num uint32) {
+	if s.rule.Load() == 0 {
+		s.rule.Store(num + 1)
+		return
+	}
+	s.rules.add(num)
+}
+
+func (s *state) hasRule(num uint32) bool {
+	return s.rule.Load() == num+1 || slices.Contains(s.rules.load(), num)
+}
+
+// appendRules appends the numbers of the rules ending in s to dst.
+func (s *state) appendRules(dst []uint32) []uint32 {
+	if r := s.rule.Load(); r != 0 {
+		dst = append(dst, r-1)
+		dst = append(dst, s.rules.load()...)
+	}
+	return dst
 }
 
 // group holds all conditions leaving one state on one path. Their leaves
@@ -45,18 +69,37 @@ type keyed struct {
 	edge *edge
 }
 
-// leaf is a single-value pattern: equals, prefix, suffix or wildcard.
+// leaf is a single-value pattern: equals, prefix, suffix or wildcard. Most
+// leaves belong to a single condition, which is therefore stored inline.
 type leaf struct {
-	id    uint32      // index in group.leaves
-	edges list[*edge] // monotone conditions that may hold when this leaf matches
+	id   uint32               // index in group.leaves
+	edge atomic.Pointer[edge] // first monotone condition that may hold when this leaf matches
+	more list[*edge]          // further such conditions
+}
+
+// addEdge registers e at l. Writer only.
+func (l *leaf) addEdge(e *edge) {
+	if l.edge.Load() == nil {
+		l.edge.Store(e)
+		return
+	}
+	l.more.add(e)
+}
+
+// appendEdges appends the conditions registered at l to dst.
+func (l *leaf) appendEdges(dst []*edge) []*edge {
+	if e := l.edge.Load(); e != nil {
+		dst = append(dst, e)
+		dst = append(dst, l.more.load()...)
+	}
+	return dst
 }
 
 // edge is a condition leading to the next state.
 type edge struct {
-	id     uint64
-	f      formula
-	simple bool // holds whenever a leaf it is registered at matches
-	next   *state
+	id   uint64
+	f    *formula // nil if the condition holds whenever a leaf it is registered at matches
+	next *state
 }
 
 // formula is the compiled form of an expr over the leaves of a group.
@@ -141,13 +184,17 @@ func (t *trie) follow(s *state, c condition) *state {
 		return e.next
 	}
 	t.edgeSeq++
-	e := &edge{id: t.edgeSeq, f: g.compile(c.expr), simple: c.expr.simple(), next: new(state)}
+	f := g.compile(c.expr)
+	e := &edge{id: t.edgeSeq, next: new(state)}
+	if !c.expr.simple() {
+		e.f = &f
+	}
 	k := g.byKey[c.expr.key] // compile may have added the leaf of this key
 	k.edge = e
 	g.byKey[c.expr.key] = k
 	if c.expr.monotone() {
-		for _, id := range e.f.triggers() {
-			g.leaves[id].edges.add(e)
+		for _, id := range f.triggers() {
+			g.leaves[id].addEdge(e)
 		}
 	} else {
 		g.neg.add(e)
@@ -286,7 +333,7 @@ func (sc *scratch) find(path string, h uint64) *span {
 
 // visit collects the rules of s and follows every condition that holds.
 func (sc *scratch) visit(s *state) {
-	sc.out = append(sc.out, s.rules.load()...)
+	sc.out = s.appendRules(sc.out)
 	groups := s.glist.load()
 	if len(groups) <= len(sc.spans) {
 		for _, g := range groups {
@@ -339,7 +386,7 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 	// afterwards, because they reuse hits.
 	start := len(sc.edges)
 	for _, l := range hits {
-		sc.edges = append(sc.edges, l.edges.load()...)
+		sc.edges = l.appendEdges(sc.edges)
 	}
 	if len(sc.edges)-start > 1 {
 		cand := sc.edges[start:]
@@ -348,7 +395,7 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 	}
 	n := start
 	for _, e := range sc.edges[start:] {
-		if e.simple || e.f.eval(hits) {
+		if e.f == nil || e.f.eval(hits) {
 			sc.edges[n] = e
 			n++
 		}

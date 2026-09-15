@@ -70,9 +70,8 @@ func (h *HyperMatch[T]) AddRule(id T, conditions ConditionSet) error {
 		h.ids.add(id) // published before any state refers to num
 		h.nums[id] = num
 	}
-	s := h.trie.insert(conds)
-	if !known || !slices.Contains(s.rules.load(), num) {
-		s.rules.add(num)
+	if s := h.trie.insert(conds); !known || !s.hasRule(num) {
+		s.addRule(num)
 	}
 	return nil
 }
