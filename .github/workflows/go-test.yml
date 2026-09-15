@@ -27,7 +27,7 @@ jobs:
         cache: true
 
     - name: Test
-      run: go test -coverprofile cover.out -v ./...
+      run: go test -race -coverprofile cover.out -v ./...
 
     - name: Send Coverage Report
       uses: shogo82148/actions-goveralls@v1
