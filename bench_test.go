@@ -2,6 +2,7 @@ package hypermatch
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -175,6 +176,7 @@ func BenchmarkMatch(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
 				h := newBenchMatcher(b, w, n)
 				events := benchEvents(w, n)
+				runtime.GC() // measure the steady state, not the garbage of the setup
 				b.ReportAllocs()
 				var matches, i int
 				for b.Loop() {
@@ -192,6 +194,7 @@ func BenchmarkMatchParallel(b *testing.B) {
 	for _, w := range benchWorkloads {
 		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
 			h := newBenchMatcher(b, w, n)
+			runtime.GC()
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -205,6 +208,35 @@ func BenchmarkMatchParallel(b *testing.B) {
 			})
 		})
 	}
+}
+
+// BenchmarkMemory reports the heap retained per rule by a matcher with
+// 100,000 rules.
+func BenchmarkMemory(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		if w.name == "nearmiss" {
+			continue
+		}
+		b.Run(w.name, func(b *testing.B) {
+			var perRule float64
+			for b.Loop() {
+				before := heapAlloc()
+				h := newBenchMatcher(b, w, n)
+				perRule = float64(int64(heapAlloc())-int64(before)) / n
+				runtime.KeepAlive(h)
+			}
+			b.ReportMetric(perRule, "B/rule")
+		})
+	}
+}
+
+// heapAlloc returns the live heap after a full garbage collection.
+func heapAlloc() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
 }
 
 // BenchmarkAddRule measures building a matcher with 10,000 rules per op.

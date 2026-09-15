@@ -1,6 +1,7 @@
 package hypermatch
 
 import (
+	"hash/maphash"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -17,8 +18,8 @@ type valueIndex struct {
 	equals     strMap[*leaf]
 	prefixes   strMap[*leaf]
 	suffixes   strMap[*leaf]
-	prefixLens list[int] // sorted
-	suffixLens list[int] // sorted
+	prefixLens atomic.Pointer[[]int] // sorted, copied on write
+	suffixLens atomic.Pointer[[]int] // sorted, copied on write
 	glob       atomic.Pointer[globNode]
 	exists     atomic.Pointer[leaf]
 }
@@ -46,20 +47,36 @@ func (x *valueIndex) add(e *expr, l *leaf) {
 	}
 }
 
-func addLength(lens *list[int], n int) {
-	cur := lens.load()
+func addLength(lens *atomic.Pointer[[]int], n int) {
+	var cur []int
+	if p := lens.Load(); p != nil {
+		cur = *p
+	}
 	if i, found := slices.BinarySearch(cur, n); !found {
-		lens.replace(slices.Insert(slices.Clone(cur), i, n))
+		s := slices.Insert(slices.Clone(cur), i, n)
+		lens.Store(&s)
 	}
 }
 
-// collect appends the leaves matching the folded value v to hits. The
-// exists leaf is not included, it is handled per property.
-func (x *valueIndex) collect(v []byte, hits []*leaf, sc *scratch) []*leaf {
-	if l, ok := x.equals.getBytes(v); ok {
-		hits = append(hits, l)
+func loadLengths(lens *atomic.Pointer[[]int]) []int {
+	if p := lens.Load(); p != nil {
+		return *p
 	}
-	for _, n := range x.prefixLens.load() {
+	return nil
+}
+
+// collect appends the leaves matching the folded value v, located at r, to
+// hits. The exists leaf is not included, it is handled per property.
+func (x *valueIndex) collect(v []byte, r *vref, hits []*leaf, sc *scratch) []*leaf {
+	if t := x.equals.t.Load(); t != nil {
+		if !r.hashed {
+			r.hash, r.hashed = maphash.Bytes(hashSeed, v), true
+		}
+		if l, ok := t.lookupBytes(r.hash, v); ok {
+			hits = append(hits, l)
+		}
+	}
+	for _, n := range loadLengths(&x.prefixLens) {
 		if n > len(v) {
 			break
 		}
@@ -67,7 +84,7 @@ func (x *valueIndex) collect(v []byte, hits []*leaf, sc *scratch) []*leaf {
 			hits = append(hits, l)
 		}
 	}
-	for _, n := range x.suffixLens.load() {
+	for _, n := range loadLengths(&x.suffixLens) {
 		if n > len(v) {
 			break
 		}
@@ -88,9 +105,15 @@ func (x *valueIndex) collect(v []byte, hits []*leaf, sc *scratch) []*leaf {
 type globNode struct {
 	kids    byteMap[*globNode]
 	spin    atomic.Pointer[globNode] // target of a '*' token
-	spinner bool                     // consumes any byte; immutable
-	final   list[*leaf]              // patterns ending here
-	reach   list[*leaf]              // patterns ending here with a trailing '*'
+	accept  atomic.Pointer[globAccept]
+	spinner bool // consumes any byte; immutable
+}
+
+// globAccept holds the patterns ending at a node. Most nodes have none, so
+// it is allocated on demand.
+type globAccept struct {
+	final list[*leaf] // patterns ending here
+	reach list[*leaf] // patterns ending here with a trailing '*'
 }
 
 // insert adds the folded wildcard pattern for leaf l. Writer only.
@@ -113,10 +136,15 @@ func (n *globNode) insert(pattern string, l *leaf) {
 		}
 		n = k
 	}
+	a := n.accept.Load()
+	if a == nil {
+		a = new(globAccept)
+		n.accept.Store(a)
+	}
 	if trailing {
-		n.reach.add(l)
+		a.reach.add(l)
 	} else {
-		n.final.add(l)
+		a.final.add(l)
 	}
 }
 
@@ -141,7 +169,9 @@ func (n *globNode) match(v []byte, hits []*leaf, sc *scratch) []*leaf {
 		}
 	}
 	for _, s := range cur {
-		hits = append(hits, s.final.load()...)
+		if a := s.accept.Load(); a != nil {
+			hits = append(hits, a.final.load()...)
+		}
 	}
 	sc.globCur, sc.globNext = cur, next
 	return hits
@@ -151,7 +181,9 @@ func (n *globNode) match(v []byte, hits []*leaf, sc *scratch) []*leaf {
 // without consuming input.
 func (n *globNode) enter(set []*globNode, hits []*leaf) ([]*globNode, []*leaf) {
 	set = append(set, n)
-	hits = append(hits, n.reach.load()...)
+	if a := n.accept.Load(); a != nil {
+		hits = append(hits, a.reach.load()...)
+	}
 	if s := n.spin.Load(); s != nil {
 		set = addSpinner(set, s)
 	}

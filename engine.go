@@ -2,8 +2,8 @@ package hypermatch
 
 import (
 	"cmp"
+	"hash/maphash"
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -29,13 +29,20 @@ type state struct {
 // group, regardless of the number of conditions.
 type group struct {
 	path  string
+	hash  uint64 // of path
 	index valueIndex
 	neg   list[*edge] // conditions containing anythingBut, evaluated whenever the path is present
 
 	// Writer only.
-	edges  map[string]*edge // by expression key
+	byKey  map[string]keyed // leaves and edges by expression key
 	leaves []*leaf          // by id
-	byKey  map[string]*leaf // by expression key
+}
+
+// keyed holds the leaf and the edge of an expression key. A condition that
+// consists of a single pattern has both.
+type keyed struct {
+	leaf *leaf
+	edge *edge
 }
 
 // leaf is a single-value pattern: equals, prefix, suffix or wildcard.
@@ -122,16 +129,22 @@ func (t *trie) insert(conds []condition) *state {
 func (t *trie) follow(s *state, c condition) *state {
 	g, ok := s.groups.get(c.path)
 	if !ok {
-		g = &group{path: c.path, edges: make(map[string]*edge), byKey: make(map[string]*leaf)}
+		g = &group{
+			path:  c.path,
+			hash:  maphash.String(hashSeed, c.path),
+			byKey: make(map[string]keyed),
+		}
 		s.groups.put(c.path, g)
 		s.glist.add(g)
 	}
-	if e, ok := g.edges[c.expr.key]; ok {
+	if e := g.byKey[c.expr.key].edge; e != nil {
 		return e.next
 	}
 	t.edgeSeq++
 	e := &edge{id: t.edgeSeq, f: g.compile(c.expr), simple: c.expr.simple(), next: new(state)}
-	g.edges[c.expr.key] = e
+	k := g.byKey[c.expr.key] // compile may have added the leaf of this key
+	k.edge = e
+	g.byKey[c.expr.key] = k
 	if c.expr.monotone() {
 		for _, id := range e.f.triggers() {
 			g.leaves[id].edges.add(e)
@@ -154,23 +167,25 @@ func (g *group) compile(e *expr) formula {
 }
 
 func (g *group) leaf(e *expr) *leaf {
-	if l, ok := g.byKey[e.key]; ok {
-		return l
+	k := g.byKey[e.key]
+	if k.leaf != nil {
+		return k.leaf
 	}
-	l := &leaf{id: uint32(len(g.leaves))}
-	g.leaves = append(g.leaves, l)
-	g.byKey[e.key] = l
-	g.index.add(e, l)
-	return l
+	k.leaf = &leaf{id: uint32(len(g.leaves))}
+	g.leaves = append(g.leaves, k.leaf)
+	g.byKey[e.key] = k
+	g.index.add(e, k.leaf)
+	return k.leaf
 }
 
 // scratch holds the buffers of one Match call. Scratches are pooled, so
 // matching does not allocate in the steady state.
 type scratch struct {
-	props    []property // properties with values, sorted by path
-	spans    []span     // one per distinct path
-	fbuf     []byte     // folded values
-	frefs    []vref     // positions of the folded values in fbuf
+	props    []property
+	spans    []span  // one per distinct path
+	slots    []int32 // hash table of spans by path: index+1, or 0 if empty
+	fbuf     []byte  // folded values
+	frefs    []vref
 	hits     []*leaf
 	edges    []*edge // stack of edges to follow
 	out      []uint32
@@ -178,40 +193,67 @@ type scratch struct {
 	globNext []*globNode
 }
 
+// property is an event property with at least one value.
 type property struct {
-	path   string
 	values []string
+	next   int // index of the next property with the same path, or -1
 }
 
-// span describes the properties props[lo:hi], which share one path. Their
-// values are folded on first use into frefs[flo:fhi].
+// span collects the properties that share a path. Their values are folded
+// on first use into frefs[flo:fhi].
 type span struct {
-	path     string
-	lo, hi   int
-	flo, fhi int
-	folded   bool
+	path        string
+	hash        uint64
+	first, last int
+	flo, fhi    int
+	folded      bool
 }
 
-type vref struct{ lo, hi int }
+// vref is the position of a folded value in fbuf, together with its hash
+// once computed.
+type vref struct {
+	lo, hi int
+	hash   uint64
+	hashed bool
+}
 
 var scratchPool = sync.Pool{New: func() any { return new(scratch) }}
 
 func (sc *scratch) reset(event []Property) {
 	sc.props = sc.props[:0]
-	for i := range event {
-		if len(event[i].Values) > 0 {
-			sc.props = append(sc.props, property{event[i].Path, event[i].Values})
-		}
-	}
-	slices.SortFunc(sc.props, func(a, b property) int { return strings.Compare(a.path, b.path) })
 	sc.spans = sc.spans[:0]
-	for i := 0; i < len(sc.props); {
-		j := i + 1
-		for j < len(sc.props) && sc.props[j].path == sc.props[i].path {
-			j++
+	size := 8
+	for size < 2*len(event) {
+		size *= 2
+	}
+	if cap(sc.slots) < size {
+		sc.slots = make([]int32, size)
+	} else {
+		sc.slots = sc.slots[:size]
+		clear(sc.slots)
+	}
+	mask := uint64(size - 1)
+	for i := range event {
+		p := &event[i]
+		if len(p.Values) == 0 {
+			continue
 		}
-		sc.spans = append(sc.spans, span{path: sc.props[i].path, lo: i, hi: j})
-		i = j
+		idx := len(sc.props)
+		sc.props = append(sc.props, property{values: p.Values, next: -1})
+		h := maphash.String(hashSeed, p.Path)
+		for j := h & mask; ; j = (j + 1) & mask {
+			s := sc.slots[j]
+			if s == 0 {
+				sc.slots[j] = int32(len(sc.spans) + 1)
+				sc.spans = append(sc.spans, span{path: p.Path, hash: h, first: idx, last: idx})
+				break
+			}
+			if sp := &sc.spans[s-1]; sp.hash == h && sp.path == p.Path {
+				sc.props[sp.last].next = idx
+				sp.last = idx
+				break
+			}
+		}
 	}
 	sc.fbuf = sc.fbuf[:0]
 	sc.frefs = sc.frefs[:0]
@@ -219,19 +261,27 @@ func (sc *scratch) reset(event []Property) {
 }
 
 func (sc *scratch) release() {
-	clear(sc.props) // do not retain the caller's strings
+	// Do not retain the caller's strings.
+	clear(sc.props)
+	clear(sc.spans)
 	if cap(sc.out) > 1<<16 || cap(sc.fbuf) > 1<<20 {
 		return // let oversized buffers be collected
 	}
 	scratchPool.Put(sc)
 }
 
-func (sc *scratch) find(path string) *span {
-	i, found := slices.BinarySearchFunc(sc.spans, path, func(s span, p string) int { return strings.Compare(s.path, p) })
-	if !found {
-		return nil
+// find returns the span of path, whose hash is h, or nil.
+func (sc *scratch) find(path string, h uint64) *span {
+	mask := uint64(len(sc.slots) - 1)
+	for j := h & mask; ; j = (j + 1) & mask {
+		s := sc.slots[j]
+		if s == 0 {
+			return nil
+		}
+		if sp := &sc.spans[s-1]; sp.hash == h && sp.path == path {
+			return sp
+		}
 	}
-	return &sc.spans[i]
 }
 
 // visit collects the rules of s and follows every condition that holds.
@@ -240,15 +290,19 @@ func (sc *scratch) visit(s *state) {
 	groups := s.glist.load()
 	if len(groups) <= len(sc.spans) {
 		for _, g := range groups {
-			if sp := sc.find(g.path); sp != nil {
+			if sp := sc.find(g.path, g.hash); sp != nil {
 				sc.evalGroup(g, sp)
 			}
 		}
 		return
 	}
+	// More groups than paths in the event. The table is published before
+	// any group is added to glist, so it is not nil here.
+	t := s.groups.t.Load()
 	for i := range sc.spans {
-		if g, ok := s.groups.get(sc.spans[i].path); ok {
-			sc.evalGroup(g, &sc.spans[i])
+		sp := &sc.spans[i]
+		if g, ok := t.lookup(sp.hash, sp.path); ok {
+			sc.evalGroup(g, sp)
 		}
 	}
 }
@@ -256,11 +310,11 @@ func (sc *scratch) visit(s *state) {
 func (sc *scratch) evalGroup(g *group, sp *span) {
 	if !sp.folded {
 		sp.flo = len(sc.frefs)
-		for _, p := range sc.props[sp.lo:sp.hi] {
-			for _, v := range p.values {
+		for i := sp.first; i >= 0; i = sc.props[i].next {
+			for _, v := range sc.props[i].values {
 				lo := len(sc.fbuf)
 				sc.fbuf = appendFold(sc.fbuf, v)
-				sc.frefs = append(sc.frefs, vref{lo, len(sc.fbuf)})
+				sc.frefs = append(sc.frefs, vref{lo: lo, hi: len(sc.fbuf)})
 			}
 		}
 		sp.fhi = len(sc.frefs)
@@ -268,8 +322,9 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 	}
 
 	hits := sc.hits[:0]
-	for _, r := range sc.frefs[sp.flo:sp.fhi] {
-		hits = g.index.collect(sc.fbuf[r.lo:r.hi], hits, sc)
+	for i := sp.flo; i < sp.fhi; i++ {
+		r := &sc.frefs[i]
+		hits = g.index.collect(sc.fbuf[r.lo:r.hi], r, hits, sc)
 	}
 	if l := g.index.exists.Load(); l != nil {
 		hits = append(hits, l)

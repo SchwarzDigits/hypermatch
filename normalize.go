@@ -57,7 +57,7 @@ func normalizeRule(cs ConditionSet) ([]condition, error) {
 	if len(cs) == 0 {
 		return nil, fmt.Errorf("%w: no conditions", ErrInvalidRule)
 	}
-	byPath := make(map[string][]*expr, len(cs))
+	conds := make([]condition, len(cs))
 	for i := range cs {
 		c := &cs[i]
 		if c.Path == "" {
@@ -67,19 +67,29 @@ func normalizeRule(cs ConditionSet) ([]condition, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: condition %q: %w", ErrInvalidRule, c.Path, err)
 		}
-		byPath[c.Path] = append(byPath[c.Path], e)
-	}
-	conds := make([]condition, 0, len(byPath))
-	for path, es := range byPath {
-		e := es[0]
-		if len(es) > 1 {
-			// All conditions on a path must hold, which is what allOf means.
-			e = combine(opAllOf, es)
-		}
-		conds = append(conds, condition{path: path, expr: e})
+		conds[i] = condition{path: c.Path, expr: e}
 	}
 	slices.SortFunc(conds, func(a, b condition) int { return strings.Compare(a.path, b.path) })
-	return conds, nil
+
+	// All conditions on a path must hold, which is what allOf means.
+	merged := conds[:0]
+	for i := 0; i < len(conds); {
+		j := i + 1
+		for j < len(conds) && conds[j].path == conds[i].path {
+			j++
+		}
+		c := conds[i]
+		if j-i > 1 {
+			es := make([]*expr, 0, j-i)
+			for _, d := range conds[i:j] {
+				es = append(es, d.expr)
+			}
+			c.expr = combine(opAllOf, es)
+		}
+		merged = append(merged, c)
+		i = j
+	}
+	return merged, nil
 }
 
 func normalizePattern(p *Pattern) (*expr, error) {

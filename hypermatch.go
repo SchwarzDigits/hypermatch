@@ -45,8 +45,10 @@ func ValidateRule(conditions ConditionSet) error {
 // rejected with an error wrapping ErrInvalidRule (see ValidateRule) and leave
 // the HyperMatch unchanged. AddRule neither modifies nor retains conditions.
 func (h *HyperMatch[T]) AddRule(id T, conditions ConditionSet) error {
-	if v := reflect.ValueOf(any(id)); v.IsValid() && !v.Comparable() {
-		return fmt.Errorf("%w: identifier of type %T is not comparable", ErrInvalidRule, id)
+	if mayContainInterface(reflect.TypeFor[T]()) {
+		if v := reflect.ValueOf(any(id)); v.IsValid() && !v.Comparable() {
+			return fmt.Errorf("%w: identifier of type %T is not comparable", ErrInvalidRule, id)
+		}
 	}
 	conds, err := normalizeRule(conditions)
 	if err != nil {
@@ -73,6 +75,24 @@ func (h *HyperMatch[T]) AddRule(id T, conditions ConditionSet) error {
 		s.rules.add(num)
 	}
 	return nil
+}
+
+// mayContainInterface reports whether values of the comparable type t can
+// hold interface values, whose dynamic type may not be comparable.
+func mayContainInterface(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Interface:
+		return true
+	case reflect.Array:
+		return mayContainInterface(t.Elem())
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if mayContainInterface(t.Field(i).Type) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Match returns the identifiers of all rules the event matches, in the order

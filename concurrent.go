@@ -2,6 +2,7 @@ package hypermatch
 
 import (
 	"hash/maphash"
+	"math/bits"
 	"slices"
 	"sync/atomic"
 )
@@ -13,31 +14,45 @@ import (
 // stores, so readers always see a consistent, possibly slightly outdated,
 // snapshot and never wait for the writer.
 
-// list is an append-only slice.
+// list is an append-only slice. Elements below the published length are
+// never written again, and a grown backing array contains all published
+// elements, so readers only need the length and the current array.
 type list[T any] struct {
-	p atomic.Pointer[[]T]
+	data atomic.Pointer[[]T] // backing array, len(data) == cap(data)
+	n    atomic.Int32        // published length
 }
 
 // load returns the published elements. The result must not be modified.
 func (l *list[T]) load() []T {
-	if p := l.p.Load(); p != nil {
-		return *p
+	// The length must be loaded first: the array it was published with,
+	// or any later one, holds at least that many elements.
+	n := l.n.Load()
+	if n == 0 {
+		return nil
 	}
-	return nil
+	return (*l.data.Load())[:n]
 }
 
-// add appends v. Readers holding an older snapshot never access the slot
-// written here, because it lies beyond the length they loaded.
+// add appends v. Readers never access the slot written here, because it
+// lies beyond the length they loaded.
 func (l *list[T]) add(v T) {
-	s := append(l.load(), v)
-	l.p.Store(&s)
+	n := int(l.n.Load())
+	var data []T
+	if p := l.data.Load(); p != nil {
+		data = *p
+	}
+	if n == len(data) {
+		grown := make([]T, max(2*n, 1))
+		copy(grown, data)
+		l.data.Store(&grown)
+		data = grown
+	}
+	data[n] = v
+	l.n.Store(int32(n + 1))
 }
 
-// replace publishes s, which must not be modified afterwards.
-func (l *list[T]) replace(s []T) {
-	l.p.Store(&s)
-}
-
+// hashSeed is shared by all hash tables, so a hash computed once can be
+// used for lookups in several tables.
 var hashSeed = maphash.MakeSeed()
 
 // strMap is a hash map with string keys, using open addressing and linear
@@ -59,11 +74,21 @@ type strEntry[V any] struct {
 }
 
 func (m *strMap[V]) get(key string) (v V, ok bool) {
-	t := m.t.Load()
-	if t == nil {
-		return v, false
+	if t := m.t.Load(); t != nil {
+		return t.lookup(maphash.String(hashSeed, key), key)
 	}
-	h := maphash.String(hashSeed, key)
+	return v, false
+}
+
+func (m *strMap[V]) getBytes(key []byte) (v V, ok bool) {
+	if t := m.t.Load(); t != nil {
+		return t.lookupBytes(maphash.Bytes(hashSeed, key), key)
+	}
+	return v, false
+}
+
+// lookup finds key, given its hash h.
+func (t *strTable[V]) lookup(h uint64, key string) (v V, ok bool) {
 	for i := h & t.mask; ; i = (i + 1) & t.mask {
 		e := t.slots[i].Load()
 		if e == nil {
@@ -75,12 +100,8 @@ func (m *strMap[V]) get(key string) (v V, ok bool) {
 	}
 }
 
-func (m *strMap[V]) getBytes(key []byte) (v V, ok bool) {
-	t := m.t.Load()
-	if t == nil {
-		return v, false
-	}
-	h := maphash.Bytes(hashSeed, key)
+// lookupBytes finds key, given its hash h.
+func (t *strTable[V]) lookupBytes(h uint64, key []byte) (v V, ok bool) {
 	for i := h & t.mask; ; i = (i + 1) & t.mask {
 		e := t.slots[i].Load()
 		if e == nil {
@@ -137,15 +158,24 @@ func (m *strMap[V]) grow(old *strTable[V]) *strTable[V] {
 	return t
 }
 
-// byteMap maps bytes to values. It is copied on write, which is cheap
-// because it holds at most 256 entries and usually only a few.
+// byteMap maps bytes to values. A 256-bit set of the present keys makes
+// lookups constant-time: the rank of a key in the set is its index in vals.
+// The map is copied on write, which is cheap because it has at most 256
+// entries and usually only a few.
 type byteMap[V any] struct {
 	p atomic.Pointer[byteTable[V]]
 }
 
 type byteTable[V any] struct {
-	keys []byte // sorted
-	vals []V
+	set  [4]uint64 // present keys
+	base [4]uint8  // number of keys in the words of set before each word
+	vals []V       // ordered by key
+}
+
+// rank returns the index of c in vals and whether c is present.
+func (t *byteTable[V]) rank(c byte) (int, bool) {
+	w, bit := c>>6, uint64(1)<<(c&63)
+	return int(t.base[w]) + bits.OnesCount64(t.set[w]&(bit-1)), t.set[w]&bit != 0
 }
 
 func (m *byteMap[V]) get(c byte) (v V, ok bool) {
@@ -153,35 +183,30 @@ func (m *byteMap[V]) get(c byte) (v V, ok bool) {
 	if t == nil {
 		return v, false
 	}
-	lo, hi := 0, len(t.keys)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if t.keys[mid] < c {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
+	i, ok := t.rank(c)
+	if !ok {
+		return v, false
 	}
-	if lo < len(t.keys) && t.keys[lo] == c {
-		return t.vals[lo], true
-	}
-	return v, false
+	return t.vals[i], true
 }
 
 // put inserts or replaces the value for c. Writer only.
 func (m *byteMap[V]) put(c byte, v V) {
-	var keys []byte
-	var vals []V
-	if t := m.p.Load(); t != nil {
-		keys, vals = t.keys, t.vals
+	t := m.p.Load()
+	if t == nil {
+		t = new(byteTable[V])
 	}
-	i, found := slices.BinarySearch(keys, c)
+	i, found := t.rank(c)
+	n := &byteTable[V]{set: t.set}
 	if found {
-		vals = slices.Clone(vals)
-		vals[i] = v
+		n.vals = slices.Clone(t.vals)
+		n.vals[i] = v
 	} else {
-		keys = slices.Insert(slices.Clone(keys), i, c)
-		vals = slices.Insert(slices.Clone(vals), i, v)
+		n.vals = slices.Insert(slices.Clone(t.vals), i, v)
+		n.set[c>>6] |= 1 << (c & 63)
 	}
-	m.p.Store(&byteTable[V]{keys: keys, vals: vals})
+	for w := 1; w < len(n.base); w++ {
+		n.base[w] = n.base[w-1] + uint8(bits.OnesCount64(n.set[w-1]))
+	}
+	m.p.Store(n)
 }
