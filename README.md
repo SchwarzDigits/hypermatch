@@ -18,7 +18,12 @@ hypermatch v2 has a brand-new matching engine:
 - 🪶 **Lean**: less than 450 bytes per rule, allocation-free matching with `AppendMatches`, no dependencies.
 - ✅ **Precise**: every pattern type follows precisely specified semantics, checked continuously with differential tests and fuzzing.
 - ✨ **Modern API**: generic rule identifiers, validation errors that point to the problem, and results in insertion order.
-- 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 4. See the [comparison](#performance).
+- 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly, 3 to 5 times as fast as decoding them first.
+- 🔄 **Live rule updates**: `RemoveRule` removes rules at run time without ever blocking `Match`.
+- 🔢 **Numbers and missing fields**: compare values numerically with `lt`, `lte`, `gt`, `gte` and `between`, and match present or absent fields with `exists`.
+- 🎯 **Routing**: `MatchFirst` finds the highest-priority rule and skips everything that cannot beat it, and `ReplaceRule` swaps rules atomically.
+- 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not.
+- 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 5. See the [comparison](#performance).
 
 Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
 
@@ -26,10 +31,10 @@ Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
 Hypermatch is a high-performance Go library that matches events against large sets of rules. Rules are compiled into a shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
 - **Fast**: Matches an event against 100,000 rules in about half a microsecond on a single core, and 14 million events per second on 14 cores. [Benchmarks](#performance)
-- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added.
+- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added or removed.
 - **Correct**: The matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
 - **Readable Rule Format**: Write rules in Go or as human-readable JSON objects.
-- **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, anything-but, all-of and any-of conditions, which can be nested freely.
+- **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, numeric comparisons, exists, anything-but, all-of and any-of conditions, which can be nested freely.
 - **No Dependencies**: Only the Go standard library.
 
 An event consists of a list of fields, provided as name/value pairs. A rule links these event fields to patterns that determine whether the event matches.
@@ -81,7 +86,33 @@ func main() {
 }
 ```
 
+# Use Cases
+
+hypermatch fits wherever many rules have to be checked against a stream of events:
+
+- **Alert routing**: Route alerts from Prometheus, Grafana or any monitoring system to teams, channels and on-call schedules. Each team owns rules like `{"team": {"equals": "shop"}, "severity": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}}`, and `MatchFirst` picks the route with the highest priority.
+- **Event-driven automation**: Trigger workflows, webhooks or functions for the events on a message bus such as Kafka, NATS or SQS, similar to the event patterns of AWS EventBridge. `MatchJSON` works directly on the raw messages.
+- **Subscriptions and notifications**: Let users subscribe to events with their own filters, for example price alerts like `{"symbol": {"equals": "ACME"}, "price": {"lt": 100}}` or "tell me about new issues labeled bug". Hundreds of thousands of subscriptions are no problem.
+- **Feature flags and targeting**: Decide from their attributes which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
+- **IoT and telemetry**: Detect sensor readings outside their normal range with `between`, `lt` and `gt`, per device type or site.
+- **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths or logins from unusual places, with prefix, suffix and wildcard patterns.
+- **Content-based routing**: Route orders, tickets or documents to the queues or services responsible for their content.
+
+The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions and feature targeting in code.
+
 # Documentation
+## Which Method to Use
+
+| Your events are | Use | Why |
+|---|---|---|
+| JSON documents, for example from HTTP, Kafka or a message queue | `MatchJSON` | Fastest end to end: it decodes only the values your rules refer to, and you don't need `json.Unmarshal` |
+| Go values you already have | `Match` | No encoding needed: build a `[]Property` from your data |
+
+- **Hot loops**: Use `AppendMatchesJSON` or `AppendMatches` and reuse the result slice. Matching then does not allocate at all.
+- **Only the best match**: If an event needs just one rule, for example to route it, use `MatchFirst` or `MatchFirstJSON` and add the rules in the order of their priority. They skip everything that cannot beat the best rule found so far.
+- **Changing rules**: Add, replace and remove rules at any time with `AddRule`, `ReplaceRule` and `RemoveRule`, even while other goroutines are matching.
+- **Debugging rules**: `Explain` shows condition by condition why a rule matches an event or not.
+
 ## Example Event
 
 An event is represented as a JSON object with various fields. Here’s a sample event:
@@ -130,7 +161,7 @@ The following rules apply to all conditions:
 - **Case-Insensitive Values**: All value comparisons are case-insensitive, including non-ASCII letters (`"ÄRGER"` equals `"ärger"`).
 - **Case-Sensitive Paths**: `"Name"` and `"name"` are different paths, just like keys in JSON.
 - **Supported Types**: Values are strings or string arrays.
-- **Missing Properties**: A condition never matches a property that is absent from the event. This includes `anythingBut`. A property without values counts as absent.
+- **Missing Properties**: A condition never matches a property that is absent from the event, except for `{"exists": false}`. This includes `anythingBut`. A property without values counts as absent.
 - **Repeated Paths**: Several properties with the same path in an event act as one property with all their values. Several conditions on the same path in a rule must all match, just like `allOf`.
 
 Here’s an example rule that matches the event above:
@@ -330,12 +361,63 @@ If the attribute value is type of:
 - **String**: Checks if the value matches all conditions, for example `{"allOf": [{"prefix": "web"}, {"suffix": "shop"}]}`
 - **String array**: Checks if the array contains both "shop" and "backend"
 
+### Numeric matching: "lt", "lte", "gt" and "gte"
+Numeric conditions compare a value as a number: `lt` (less than), `lte` (less than or equal), `gt` (greater than) and `gte` (greater than or equal).
+
+```javascript
+{
+    "latency_ms": {
+        "gt": 500
+    }
+}
+```
+
+If the attribute value is type of:
+
+- **String**: Checks if the value is a number greater than 500
+- **String array**: Checks if the array contains a number greater than 500
+
+Values are compared as decimal numbers such as `42`, `-1.5`, `.5` or `1e3`, so `"1e3"` and `"1000"` are equal. Values that are not numbers never match a numeric condition. You can write bounds as JSON numbers or as strings.
+
+### "between" matching
+`between` checks if a value lies between a lower and an upper bound. Each bound is a numeric condition, which decides whether the bound itself is included.
+
+```javascript
+{
+    "status_code": {
+        "between": [{"gte": 500}, {"lt": 600}]
+    }
+}
+```
+
+If the attribute value is type of:
+
+- **String**: Checks if the value is a number from 500 up to, but not including, 600
+- **String array**: Checks if the array contains such a number. Unlike an `allOf` of two numeric conditions, both bounds must hold for the same element.
+
+### "exists" matching
+`exists` checks if an attribute is present or absent.
+
+```javascript
+{
+    "owner": {
+        "exists": false
+    }
+}
+```
+
+- `{"exists": true}` matches if the event contains the attribute with at least one value, like the wildcard `*`.
+- `{"exists": false}` matches if the event does not contain the attribute, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
+
 ## Rule Identifiers
 
 `HyperMatch[T]` identifies rules by values of any comparable type `T`, such as strings, integers or structs.
 
 - `Match` returns the identifiers of all matching rules in the order in which they were first added, each at most once, or `nil` if no rule matches.
 - Adding several condition sets under the same identifier combines them with a boolean "or": the identifier matches if any of its condition sets matches.
+- `ReplaceRule` replaces all condition sets of an identifier atomically: every `Match` sees either the old or the new rule, never both or neither, and the identifier keeps its position in the results.
+- `RemoveRule` removes all condition sets of an identifier at run time. Adding the identifier again later counts as adding a new rule.
+- `MatchFirst` returns only the first identifier `Match` would return. It does not allocate and skips the parts of the rules that cannot contain an earlier rule.
 - `RuleCount` returns the number of distinct identifiers.
 
 ## Validation
@@ -353,8 +435,9 @@ if errors.Is(err, hypermatch.ErrInvalidRule) {
 
 All methods of `HyperMatch` are safe for concurrent use:
 
-- `Match` never blocks. It runs lock-free and scales with the number of cores, even while other goroutines add rules.
-- `AddRule` calls are serialized. A rule is visible to every `Match` call that starts after its `AddRule` call returned.
+- `Match` never blocks. It runs lock-free and scales with the number of cores, even while other goroutines add or remove rules.
+- `AddRule`, `ReplaceRule` and `RemoveRule` calls are serialized. Their effect is visible to every `Match` call that starts after they returned.
+- Once a quarter of the compiled rules have been removed, `RemoveRule` compacts them, which takes about as long as adding the remaining rules again. `Match` keeps running meanwhile.
 
 The zero value of `HyperMatch` is ready to use.
 
@@ -370,30 +453,71 @@ for _, event := range events {
 }
 ```
 
+## Matching JSON Events
+
+`MatchJSON` matches an event given as a JSON object, without decoding it into Go values first. It decodes only the values of paths that rules refer to. That makes it 3 to 5 times as fast as `json.Unmarshal` followed by `Match`, with a single allocation instead of about 40:
+
+```go
+matches, err := hm.MatchJSON([]byte(`{
+    "status": "firing",
+    "alert": {"labels": {"team": "shop"}},
+    "tags": ["shop", "backend"]
+}`))
+```
+
+- **Nested objects**: Keys of nested objects are joined with `.`, so the value `shop` above is at the path `alert.labels.team`.
+- **Arrays**: Every element of an array is a value of the same path, so `tags` has the values `shop` and `backend`. The objects in an array contribute to the same paths as well.
+- **Numbers and literals**: Numbers match with their text as written in the JSON, so `500` matches `{"equals": "500"}`. Booleans match as `true` and `false`, and `null` counts as absent.
+- **Errors**: Invalid JSON is rejected with an error wrapping `ErrInvalidEvent`.
+
+`AppendMatchesJSON` appends to a slice you provide, like `AppendMatches`.
+
+## Explaining Matches
+
+`Explain` reports condition by condition how a rule matches an event, which helps when a rule does not do what you expect. `ExplainJSON` does the same for JSON events.
+
+```go
+explanation, err := hypermatch.Explain(rule, event)
+fmt.Print(explanation)
+```
+
+```
+no match
+  ✓ status: {"equals":"firing"} matched "FIRING"
+  ✗ severity: {"anyOf":[{"equals":"critical"},{"equals":"warning"}]} (values ["info"])
+      ✗ {"equals":"critical"}
+      ✗ {"equals":"warning"}
+  ✓ owner: {"exists":false} (absent)
+```
+
+The `Explanation` holds the same information in fields, for example to show it in a user interface. `Explain` follows exactly the semantics of `Match`, but it is meant for debugging rather than speed.
+
 # Performance
 
-hypermatch v2 matches an event against 100,000 rules in well under a microsecond, 20 to 30 times faster than v1 on typical rule sets. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are means of six runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+hypermatch v2 matches an event against 100,000 rules in well under a microsecond, 20 to 30 times faster than v1 on typical rule sets. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are medians of five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
 
 | Workload | Rules | Time per event | Events per second |
 |---|---|---:|---:|
-| mixed | 6 conditions using all pattern types; 10 rules match each event | 0.54 µs | 1.9 million |
-| nearmiss | Same rules; the events fail only at the last condition | 0.45 µs | 2.2 million |
-| equals | 2 `equals` conditions; events with 6 properties | 0.17 µs | 6.0 million |
+| mixed | 6 conditions of different pattern types; 10 rules match each event | 0.54 µs | 1.9 million |
+| nearmiss | Same rules; the events fail only at the last condition | 0.46 µs | 2.2 million |
+| equals | 2 `equals` conditions; events with 6 properties | 0.17 µs | 5.8 million |
 | wildcard | A different `*-appN-*` wildcard per rule | 0.34 µs | 2.9 million |
-| prefix | A different URL prefix per rule | 0.20 µs | 5.1 million |
-| anythingbut | 100 exclusion rules per service; 99 match each event | 4.33 µs | 230,000 |
+| prefix | A different URL prefix per rule | 0.20 µs | 4.9 million |
+| numeric | 10 latency thresholds per service; 6 rules match each event | 0.34 µs | 2.9 million |
+| anythingbut | 100 exclusion rules per service; 99 match each event | 3.78 µs | 260,000 |
 
 - **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload reaches 14 million events per second.
 - **Allocations**: `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all.
+- **JSON events**: `MatchJSON` matches the events of the mixed workload, given as JSON, in 0.65 µs. That is 3.5 times as fast as `json.Unmarshal` followed by `Match` (2.27 µs).
 - **Memory**: A rule takes 285 to 431 bytes.
 - **Adding rules**: Adding 10,000 rules takes 4 to 10 ms.
 
-The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch and [quamina](https://github.com/timbray/quamina), on a single goroutine:
+The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch and [quamina](https://github.com/timbray/quamina), on a single goroutine. With `MatchJSON`, hypermatch gets exactly the same JSON documents as quamina:
 
-| Rules | hypermatch | quamina |
-|---|---:|---:|
-| With a wildcard condition | 1,490,000 events/s | 4 events/s |
-| Without the wildcard condition | 1,860,000 events/s | 31,800 events/s |
+| Rules | hypermatch `Match` | hypermatch `MatchJSON` | quamina |
+|---|---:|---:|---:|
+| With a wildcard condition | 1,520,000 events/s | 1,230,000 events/s | 5 events/s |
+| Without the wildcard condition | 1,940,000 events/s | 1,540,000 events/s | 33,200 events/s |
 
 Things to consider to get maximum performance:
 - Rules that share conditions are evaluated together. Conditions are ordered by path, so conditions on alphabetically early paths that many rules have in common, such as `"env": {"equals": "prod"}`, are checked only once per event.

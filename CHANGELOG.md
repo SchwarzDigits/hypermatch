@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-09-15
+
+### Added
+- `RemoveRule` removes rules at run time without blocking `Match`.
+- `MatchJSON` and `AppendMatchesJSON` match events given as JSON objects. They decode only the values that rules refer to, and nested objects and arrays become paths such as `alert.labels.team`.
+- `ErrInvalidEvent` for events that are not valid JSON objects.
+- Numeric patterns `lt`, `lte`, `gt`, `gte` and `between`, which compare values as numbers.
+- The `exists` pattern: `{"exists": true}` matches present properties, `{"exists": false}` absent ones.
+- `ReplaceRule` replaces a rule atomically: every `Match` sees either the old or the new rule, and the rule keeps its position in the results.
+- `MatchFirst` and `MatchFirstJSON` return only the first matching rule and skip all rules that cannot come earlier.
+- `Explain` and `ExplainJSON` report condition by condition how a rule matches an event.
+- A section on use cases in the README, and runnable examples for alert routing, subscriptions and feature targeting.
+
 ## [2.0.0] - 2026-09-15
 
 The matching engine has been rewritten for correctness, speed and concurrent use. See [Migrating from v1](README.md#migrating-from-v1) for the API changes.
@@ -35,4 +48,5 @@ The matching engine has been rewritten for correctness, speed and concurrent use
 ### Removed
 - The dependency on `gotest.tools`.
 
+[2.1.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.1.0
 [2.0.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.0.0

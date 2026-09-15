@@ -14,6 +14,7 @@ import (
 //   - prefix and suffix: one hash lookup per distinct pattern length
 //   - wildcard: a trie of the pattern tokens, simulated as an NFA
 //   - exists ("*"): matches whenever the property is present
+//   - numeric comparisons: sorted lists of their bounds
 type valueIndex struct {
 	equals     strMap[*leaf]
 	prefixes   strMap[*leaf]
@@ -22,6 +23,11 @@ type valueIndex struct {
 	suffixLens atomic.Pointer[[]int] // sorted, copied on write
 	glob       atomic.Pointer[globNode]
 	exists     atomic.Pointer[leaf]
+	num        atomic.Pointer[numIndex]
+
+	// kinds has bit 1<<k set once the index contains a leaf of kind k, so
+	// that matching skips the structures a group does not use.
+	kinds atomic.Uint32
 }
 
 // add registers the leaf l for the leaf expression e. Writer only.
@@ -44,7 +50,14 @@ func (x *valueIndex) add(e *expr, l *leaf) {
 		root.insert(e.value, l)
 	case leafExists:
 		x.exists.Store(l)
+	case leafNumber:
+		ni := x.num.Load()
+		if ni == nil {
+			ni = new(numIndex)
+		}
+		x.num.Store(ni.with(parseInterval(e.value), l))
 	}
+	x.kinds.Or(1 << e.kind) // after the leaf is published
 }
 
 func addLength(lens *atomic.Pointer[[]int], n int) {
@@ -66,34 +79,50 @@ func loadLengths(lens *atomic.Pointer[[]int]) []int {
 }
 
 // collect appends the leaves matching the folded value v, located at r, to
-// hits. The exists leaf is not included, it is handled per property.
-func (x *valueIndex) collect(v []byte, r *vref, hits []*leaf, sc *scratch) []*leaf {
-	if t := x.equals.t.Load(); t != nil {
-		if !r.hashed {
-			r.hash, r.hashed = maphash.Bytes(hashSeed, v), true
-		}
-		if l, ok := t.lookupBytes(r.hash, v); ok {
-			hits = append(hits, l)
-		}
-	}
-	for _, n := range loadLengths(&x.prefixLens) {
-		if n > len(v) {
-			break
-		}
-		if l, ok := x.prefixes.getBytes(v[:n]); ok {
-			hits = append(hits, l)
+// hits, looking only at the kinds of leaves set in kinds. The exists leaf is
+// not included, it is handled per property.
+func (x *valueIndex) collect(v []byte, r *vref, hits []*leaf, sc *scratch, kinds uint32) []*leaf {
+	if kinds&(1<<leafEquals) != 0 {
+		if t := x.equals.t.Load(); t != nil {
+			if !r.hashed {
+				r.hash, r.hashed = maphash.Bytes(hashSeed, v), true
+			}
+			if l, ok := t.lookupBytes(r.hash, v); ok {
+				hits = append(hits, l)
+			}
 		}
 	}
-	for _, n := range loadLengths(&x.suffixLens) {
-		if n > len(v) {
-			break
-		}
-		if l, ok := x.suffixes.getBytes(v[len(v)-n:]); ok {
-			hits = append(hits, l)
+	if kinds&(1<<leafPrefix) != 0 {
+		for _, n := range loadLengths(&x.prefixLens) {
+			if n > len(v) {
+				break
+			}
+			if l, ok := x.prefixes.getBytes(v[:n]); ok {
+				hits = append(hits, l)
+			}
 		}
 	}
-	if root := x.glob.Load(); root != nil {
-		hits = root.match(v, hits, sc)
+	if kinds&(1<<leafSuffix) != 0 {
+		for _, n := range loadLengths(&x.suffixLens) {
+			if n > len(v) {
+				break
+			}
+			if l, ok := x.suffixes.getBytes(v[len(v)-n:]); ok {
+				hits = append(hits, l)
+			}
+		}
+	}
+	if kinds&(1<<leafGlob) != 0 {
+		if root := x.glob.Load(); root != nil {
+			hits = root.match(v, hits, sc)
+		}
+	}
+	if kinds&(1<<leafNumber) != 0 {
+		if ni := x.num.Load(); ni != nil {
+			if f, ok := r.number(v); ok {
+				hits = ni.collect(f, hits)
+			}
+		}
 	}
 	return hits
 }

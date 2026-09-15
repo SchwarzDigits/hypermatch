@@ -1,6 +1,7 @@
 package hypermatch
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -134,6 +135,23 @@ var benchWorkloads = []benchWorkload{
 		},
 		wantMatches: 99,
 	},
+	{
+		// Numeric thresholds: ten rules per service with increasing bounds.
+		name: "numeric",
+		rule: func(i, n int) ConditionSet {
+			return ConditionSet{
+				{Path: "service", Pattern: equalsP("svc-" + strconv.Itoa(i/10))},
+				{Path: "latency", Pattern: Pattern{Type: PatternGreaterThan, Value: strconv.Itoa(i % 10 * 100)}},
+			}
+		},
+		event: func(i, n int) []Property {
+			return []Property{
+				{Path: "service", Values: []string{"svc-" + strconv.Itoa((i%n)/10)}},
+				{Path: "latency", Values: []string{"550"}},
+			}
+		},
+		wantMatches: 6,
+	},
 }
 
 func newBenchMatcher(tb testing.TB, w benchWorkload, n int) *HyperMatch[int] {
@@ -237,6 +255,164 @@ func heapAlloc() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return m.HeapAlloc
+}
+
+// jsonEvent encodes an event of a benchmark workload as a JSON object.
+func jsonEvent(event []Property) []byte {
+	m := make(map[string]any, len(event))
+	for _, p := range event {
+		if len(p.Values) == 1 {
+			m[p.Path] = p.Values[0]
+		} else {
+			m[p.Path] = p.Values
+		}
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func jsonBenchEvents(w benchWorkload, n int) [][]byte {
+	var events [][]byte
+	for _, e := range benchEvents(w, n) {
+		events = append(events, jsonEvent(e))
+	}
+	return events
+}
+
+// BenchmarkMatchJSON matches the events of the workloads encoded as JSON.
+func BenchmarkMatchJSON(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
+			h := newBenchMatcher(b, w, n)
+			events := jsonBenchEvents(w, n)
+			if got, err := h.MatchJSON(events[0]); err != nil || len(got) != w.wantMatches {
+				b.Fatalf("MatchJSON = %v, %v, want %d matches", got, err, w.wantMatches)
+			}
+			runtime.GC()
+			b.ReportAllocs()
+			var matches, i int
+			for b.Loop() {
+				got, _ := h.MatchJSON(events[i%len(events)])
+				matches += len(got)
+				i++
+			}
+			benchSink.Add(int64(matches))
+		})
+	}
+}
+
+// BenchmarkUnmarshalAndMatch decodes the JSON events of BenchmarkMatchJSON
+// with encoding/json and matches the result, which MatchJSON replaces.
+func BenchmarkUnmarshalAndMatch(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		if w.name != "mixed" && w.name != "equals" {
+			continue
+		}
+		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
+			h := newBenchMatcher(b, w, n)
+			events := jsonBenchEvents(w, n)
+			runtime.GC()
+			b.ReportAllocs()
+			var matches, i int
+			for b.Loop() {
+				var m map[string]any
+				if err := json.Unmarshal(events[i%len(events)], &m); err != nil {
+					b.Fatal(err)
+				}
+				props := make([]Property, 0, len(m))
+				for k, v := range m {
+					switch v := v.(type) {
+					case string:
+						props = append(props, Property{Path: k, Values: []string{v}})
+					case []any:
+						values := make([]string, 0, len(v))
+						for _, x := range v {
+							if s, ok := x.(string); ok {
+								values = append(values, s)
+							}
+						}
+						props = append(props, Property{Path: k, Values: values})
+					}
+				}
+				matches += len(h.Match(props))
+				i++
+			}
+			benchSink.Add(int64(matches))
+		})
+	}
+}
+
+// BenchmarkMatchFirst finds only the first matching rule of each event.
+func BenchmarkMatchFirst(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		if w.wantMatches == 0 {
+			continue
+		}
+		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
+			h := newBenchMatcher(b, w, n)
+			events := benchEvents(w, n)
+			runtime.GC()
+			b.ReportAllocs()
+			var found, i int
+			for b.Loop() {
+				if _, ok := h.MatchFirst(events[i%len(events)]); ok {
+					found++
+				}
+				i++
+			}
+			benchSink.Add(int64(found))
+		})
+	}
+}
+
+// BenchmarkMatchWithRemovedRules measures the mixed workload after removing
+// every fifth of 100,000 rules, which is not enough to compact the matcher.
+func BenchmarkMatchWithRemovedRules(b *testing.B) {
+	const n = 100_000
+	w := benchWorkloads[0]
+	h := newBenchMatcher(b, w, n)
+	for i := 0; i < n; i += 5 {
+		h.RemoveRule(i)
+	}
+	events := benchEvents(w, n)
+	runtime.GC()
+	b.ReportAllocs()
+	var matches, i int
+	for b.Loop() {
+		matches += len(h.Match(events[i%len(events)]))
+		i++
+	}
+	benchSink.Add(int64(matches))
+}
+
+// BenchmarkRemoveRule measures removing all of 10,000 rules per op,
+// including the compactions this triggers.
+func BenchmarkRemoveRule(b *testing.B) {
+	const n = 10_000
+	rules := make([]ConditionSet, n)
+	for i := range rules {
+		rules[i] = mixedRule(i, n)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		h := New[int]()
+		for i, r := range rules {
+			if err := h.AddRule(i, r); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		for i := range n {
+			h.RemoveRule(i)
+		}
+	}
 }
 
 // BenchmarkAddRule measures building a matcher with 10,000 rules per op.

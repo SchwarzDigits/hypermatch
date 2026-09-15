@@ -51,6 +51,96 @@ func (l *list[T]) add(v T) {
 	l.n.Store(int32(n + 1))
 }
 
+// bitset is a set of numbers that only grows.
+type bitset struct {
+	p atomic.Pointer[[]uint64]
+}
+
+// load returns the words of the set, or nil if it is empty. Words must be
+// read with bitsHas.
+func (b *bitset) load() []uint64 {
+	if p := b.p.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+func (b *bitset) has(i uint32) bool {
+	return bitsHas(b.load(), i)
+}
+
+// bitsHas reports whether the words returned by bitset.load contain i.
+func bitsHas(words []uint64, i uint32) bool {
+	w := int(i >> 6)
+	return w < len(words) && atomic.LoadUint64(&words[w])&(1<<(i&63)) != 0
+}
+
+// set adds i. Writer only.
+func (b *bitset) set(i uint32) {
+	words := b.load()
+	w := int(i >> 6)
+	if w >= len(words) {
+		grown := make([]uint64, max(2*len(words), w+1))
+		for j := range words {
+			grown[j] = atomic.LoadUint64(&words[j])
+		}
+		b.p.Store(&grown)
+		words = grown
+	}
+	atomic.OrUint64(&words[w], 1<<(i&63))
+}
+
+// ruleMeta holds the visibility and the order key of the rule numbers that
+// ReplaceRule created or retired, in two words per number: from<<32|until
+// and 1+order. Such a rule is visible to Match calls that loaded a version
+// v with from <= v and, unless until is 0, v < until. Numbers without an
+// entry are always visible and ordered by number. Readers need no locks.
+type ruleMeta struct {
+	p atomic.Pointer[[]uint64]
+}
+
+// load returns the words of m, or nil if it has no entries. Words must be
+// read with metaSpan and metaOrder.
+func (m *ruleMeta) load() []uint64 {
+	if p := m.p.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+func metaSpan(words []uint64, n uint32) (from, until uint32) {
+	i := 2 * int(n)
+	if i >= len(words) {
+		return 0, 0
+	}
+	w := atomic.LoadUint64(&words[i])
+	return uint32(w >> 32), uint32(w)
+}
+
+func metaOrder(words []uint64, n uint32) uint32 {
+	if i := 2*int(n) + 1; i < len(words) {
+		if o := atomic.LoadUint64(&words[i]); o != 0 {
+			return uint32(o - 1)
+		}
+	}
+	return n
+}
+
+// set records the visibility and the order key of rule n. Writer only.
+func (m *ruleMeta) set(n, from, until, order uint32) {
+	words := m.load()
+	if i := 2*int(n) + 1; i >= len(words) {
+		grown := make([]uint64, max(2*len(words), i+1))
+		for j := range words {
+			grown[j] = atomic.LoadUint64(&words[j])
+		}
+		m.p.Store(&grown)
+		words = grown
+	}
+	atomic.StoreUint64(&words[2*int(n)], uint64(from)<<32|uint64(until))
+	atomic.StoreUint64(&words[2*int(n)+1], uint64(order)+1)
+}
+
 // hashSeed is shared by all hash tables, so a hash computed once can be
 // used for lookups in several tables.
 var hashSeed = maphash.MakeSeed()
