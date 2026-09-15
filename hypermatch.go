@@ -1,122 +1,112 @@
 package hypermatch
 
 import (
-	"errors"
 	"fmt"
-	"sort"
-	"strings"
+	"math"
+	"reflect"
+	"slices"
+	"sync"
 )
 
-type HyperMatch struct {
-	matcher    *fieldMatcher
-	rulesCount uint64
+// HyperMatch matches events against a set of rules. Rules are identified by
+// values of type T.
+//
+// All methods are safe for concurrent use. Match never blocks: it runs
+// lock-free and scales with the number of cores, even while rules are added.
+// AddRule calls are serialized, and a rule is visible to every Match call
+// that starts after its AddRule call returned.
+//
+// The zero value is an empty HyperMatch ready to use. A HyperMatch must not
+// be copied after first use.
+type HyperMatch[T comparable] struct {
+	mu   sync.Mutex // serializes writers
+	trie trie
+	ids  list[T]      // identifiers by rule number
+	nums map[T]uint32 // rule numbers by identifier; guarded by mu
 }
 
-func NewHyperMatch() *HyperMatch {
-	return &HyperMatch{matcher: newFieldMatcher(), rulesCount: 0}
+// New returns an empty HyperMatch.
+func New[T comparable]() *HyperMatch[T] {
+	return new(HyperMatch[T])
 }
 
-// ValidateRule validates the given condition set.
-// Returns an error if validation fails.
-func ValidateRule(set ConditionSet) error {
-	for _, s := range set {
-		if err := validateCondition(&s); err != nil {
-			return errors.Join(fmt.Errorf("could not validate condition for '%s'", s.Path), err)
+// ValidateRule reports whether conditions form a valid rule. The returned
+// error wraps ErrInvalidRule.
+func ValidateRule(conditions ConditionSet) error {
+	_, err := normalizeRule(conditions)
+	return err
+}
+
+// AddRule adds a rule. An event matches the rule if it matches every
+// condition of the set.
+//
+// Several condition sets may be added under the same id: the id then matches
+// if any of them matches, and it is reported only once. Invalid rules are
+// rejected with an error wrapping ErrInvalidRule (see ValidateRule) and leave
+// the HyperMatch unchanged. AddRule neither modifies nor retains conditions.
+func (h *HyperMatch[T]) AddRule(id T, conditions ConditionSet) error {
+	if v := reflect.ValueOf(any(id)); v.IsValid() && !v.Comparable() {
+		return fmt.Errorf("%w: identifier of type %T is not comparable", ErrInvalidRule, id)
+	}
+	conds, err := normalizeRule(conditions)
+	if err != nil {
+		return err
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	num, known := h.nums[id]
+	if !known {
+		n := len(h.ids.load())
+		if n == math.MaxUint32 {
+			return fmt.Errorf("%w: too many rules", ErrInvalidRule)
 		}
+		if h.nums == nil {
+			h.nums = make(map[T]uint32)
+		}
+		num = uint32(n)
+		h.ids.add(id) // published before any state refers to num
+		h.nums[id] = num
+	}
+	s := h.trie.insert(conds)
+	if !known || !slices.Contains(s.rules.load(), num) {
+		s.rules.add(num)
 	}
 	return nil
 }
 
-// AddRule adds a new rule to the HyperMatch instance.
-//
-// The rule is defined by a unique identifier and a set of conditions.
-// The conditions define the properties that must be matched in order for the rule to be triggered.
-//
-// If the rule is successfully added, the function returns nil.
-// Otherwise, an error is returned.
-func (m *HyperMatch) AddRule(id RuleIdentifier, conditionSet ConditionSet) error {
-	if len(conditionSet) == 0 {
-		return fmt.Errorf("no conditions provided")
-	}
-
-	sort.Slice(conditionSet, func(i, j int) bool {
-		return strings.ToLower(conditionSet[i].Path) < strings.ToLower(conditionSet[j].Path)
-	})
-
-	cfm := m.matcher
-	for _, s := range conditionSet {
-		cfm = compileCondition(cfm, id, &s)
-	}
-
-	cfm.MatchingRuleIdentifiers = append(cfm.MatchingRuleIdentifiers, id)
-
-	m.rulesCount += 1
-
-	return nil
+// Match returns the identifiers of all rules the event matches, in the order
+// in which the rules were first added, or nil if no rule matches. The event
+// is not modified.
+func (h *HyperMatch[T]) Match(event []Property) []T {
+	return h.AppendMatches(nil, event)
 }
 
-// Match takes a list of properties and returns a list of rule identifiers that match those properties
-func (m *HyperMatch) Match(properties []Property) []RuleIdentifier {
-
-	sort.Slice(properties, func(i, j int) bool {
-		return strings.ToLower(properties[i].Path) < strings.ToLower(properties[j].Path)
-	})
-
-	matches := newMatchSet()
-
-	for i := range properties {
-		tryToMatch(properties, i, m.matcher, matches)
+// AppendMatches appends the identifiers Match would return to dst and
+// returns the extended slice. Reusing dst makes matching allocation-free.
+func (h *HyperMatch[T]) AppendMatches(dst []T, event []Property) []T {
+	sc := scratchPool.Get().(*scratch)
+	sc.reset(event)
+	if len(sc.spans) > 0 {
+		sc.visit(&h.trie.root)
 	}
-
-	return matches.All()
+	if out := sc.out; len(out) > 0 {
+		if len(out) > 1 {
+			slices.Sort(out)
+			out = slices.Compact(out)
+		}
+		// Loaded after the traversal, so every rule number found resolves.
+		ids := h.ids.load()
+		dst = slices.Grow(dst, len(out))
+		for _, n := range out {
+			dst = append(dst, ids[n])
+		}
+	}
+	sc.release()
+	return dst
 }
 
-func tryToMatch(properties []Property, i int, fm *fieldMatcher, set *matchSet) {
-	if i >= len(properties) {
-		return
-	}
-	field := properties[i]
-
-	nextMatchers := match(fm, field.Path, field.Values)
-	for _, m := range nextMatchers {
-		set = set.Add(m.MatchingRuleIdentifiers...)
-		for nI := i; nI < len(properties); nI++ {
-			tryToMatch(properties, nI, m, set)
-		}
-	}
-}
-
-func match(f *fieldMatcher, field string, values []string) []*fieldMatcher {
-	vm, ok := f.Transitions[field]
-	if !ok {
-		return nil
-	}
-
-	var afms []*fieldMatcher
-
-	for _, value := range values {
-		v := str2value(value, nil, nil)
-		fms := vm.Transition(v)
-
-		/*	if len(fms) == 0 {
-				continue
-			}
-		*/
-		set := newMatchSet()
-		for _, f := range fms {
-			set.Add(f.MatchingAnythingButRuleIdentifiers...)
-		}
-
-		if ts, ok := f.AnythingButTransitions[field]; ok {
-			for id, fm := range ts {
-				if !set.Contains(id) {
-					fms = append(fms, fm)
-				}
-			}
-		}
-
-		afms = append(afms, fms...)
-	}
-
-	return afms
+// RuleCount returns the number of distinct rule identifiers.
+func (h *HyperMatch[T]) RuleCount() int {
+	return len(h.ids.load())
 }

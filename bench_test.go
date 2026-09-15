@@ -20,19 +20,6 @@ var benchSizes = []int{1_000, 10_000, 100_000}
 
 var benchSink atomic.Int64
 
-func equalsP(v string) Pattern   { return Pattern{Type: PatternEquals, Value: v} }
-func prefixP(v string) Pattern   { return Pattern{Type: PatternPrefix, Value: v} }
-func wildcardP(v string) Pattern { return Pattern{Type: PatternWildcard, Value: v} }
-func anyOfP(p ...Pattern) Pattern {
-	return Pattern{Type: PatternAnyOf, Sub: p}
-}
-func allOfP(p ...Pattern) Pattern {
-	return Pattern{Type: PatternAllOf, Sub: p}
-}
-func anythingButP(p ...Pattern) Pattern {
-	return Pattern{Type: PatternAnythingBut, Sub: p}
-}
-
 func mixedRule(i, n int) ConditionSet {
 	return ConditionSet{
 		{Path: "name", Pattern: wildcardP("*-myapp-*")},
@@ -148,9 +135,9 @@ var benchWorkloads = []benchWorkload{
 	},
 }
 
-func newBenchMatcher(tb testing.TB, w benchWorkload, n int) *HyperMatch {
+func newBenchMatcher(tb testing.TB, w benchWorkload, n int) *HyperMatch[int] {
 	tb.Helper()
-	h := NewHyperMatch()
+	h := New[int]()
 	for i := range n {
 		if err := h.AddRule(i, w.rule(i, n)); err != nil {
 			tb.Fatal(err)
@@ -234,7 +221,7 @@ func BenchmarkAddRule(b *testing.B) {
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				h := NewHyperMatch()
+				h := New[int]()
 				for i, r := range rules {
 					if err := h.AddRule(i, r); err != nil {
 						b.Fatal(err)

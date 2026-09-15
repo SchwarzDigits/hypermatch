@@ -24,34 +24,36 @@ An event consists of a list of fields, provided as name/value pairs. A rule link
 
 ```go
 import (
-    hypermatch "github.com/SchwarzDigits/hypermatch"
+    "log"
+
+    "github.com/SchwarzDigits/hypermatch"
 )
 
 func main() {
-    //Initialize hypermatch
-    hm := hypermatch.NewHyperMatch()
-    
-    //Add a rule
+    // Rules are identified by values of any comparable type, here strings.
+    hm := hypermatch.New[string]()
+
+    // Add a rule
     if err := hm.AddRule("markus_rule", hypermatch.ConditionSet{
-        hypermatch.Condition{Path: "firstname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "markus"}},
-        hypermatch.Condition{Path: "lastname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "troßbach"}},
-        }); err != nil {
-            panic(err)
+        {Path: "firstname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "markus"}},
+        {Path: "lastname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "troßbach"}},
+    }); err != nil {
+        panic(err)
     }
-    
-    //Test with match
+
+    // Test with match
     matchedRules := hm.Match([]hypermatch.Property{
         {Path: "firstname", Values: []string{"markus"}},
         {Path: "lastname", Values: []string{"troßbach"}},
     })
-    log.Printf("Following rules matches: %v", matchedRules)
-    
-    //Test without match
+    log.Printf("Following rules match: %v", matchedRules) // [markus_rule]
+
+    // Test without match
     matchedRules = hm.Match([]hypermatch.Property{
         {Path: "firstname", Values: []string{"john"}},
         {Path: "lastname", Values: []string{"doe"}},
     })
-    log.Printf("Following rules matches: %v", matchedRules)
+    log.Printf("Following rules match: %v", matchedRules) // []
 }
 ```
 
