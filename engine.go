@@ -355,6 +355,13 @@ func (sc *scratch) visit(s *state) {
 }
 
 func (sc *scratch) evalGroup(g *group, sp *span) {
+	// Load the conditions with anythingBut before looking up the values.
+	// The leaves of a condition are published before the condition, so all
+	// leaves of these conditions are visible to the lookups below. Loaded
+	// afterwards, a condition added concurrently could appear without the
+	// leaf hits that make its negation false.
+	neg := g.neg.load()
+
 	if !sp.folded {
 		sp.flo = len(sc.frefs)
 		for i := sp.first; i >= 0; i = sc.props[i].next {
@@ -401,7 +408,7 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 		}
 	}
 	sc.edges = sc.edges[:n]
-	for _, e := range g.neg.load() {
+	for _, e := range neg {
 		if e.f.eval(hits) {
 			sc.edges = append(sc.edges, e)
 		}
