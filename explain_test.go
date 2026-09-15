@@ -1,8 +1,10 @@
 package hypermatch
 
 import (
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -41,8 +43,11 @@ func TestExplain(t *testing.T) {
 	if got := e.Conditions[3].Result.Values; !slices.Equal(got, []string{"Moon"}) {
 		t.Errorf("region excluded by %v, want [Moon]", got)
 	}
-	if got := e.Conditions[4].Values; got != nil {
-		t.Errorf("owner values = %v, want nil", got)
+	if c := e.Conditions[4]; !c.Absent || c.Values != nil {
+		t.Errorf("owner: Absent = %v, Values = %v, want true, nil", c.Absent, c.Values)
+	}
+	if e.Conditions[0].Absent {
+		t.Error("status: Absent = true")
 	}
 
 	want := `no match
@@ -59,6 +64,39 @@ func TestExplain(t *testing.T) {
 `
 	if got := e.String(); got != want {
 		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestExplanationJSON checks the JSON form a user interface gets, and that
+// it decodes back into the same explanation.
+func TestExplanationJSON(t *testing.T) {
+	rule := ConditionSet{
+		cond("owner", existsP(false)),
+		cond("severity", anyOfP(equalsP("critical"), equalsP("warning"))),
+		cond("status", equalsP("firing")),
+	}
+	e, err := Explain(rule, []Property{prop("status", "FIRING"), prop("severity", "info")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"matched":false,"conditions":[` +
+		`{"path":"owner","absent":true,"result":{"pattern":{"exists":false},"matched":true}},` +
+		`{"path":"severity","values":["info"],"result":{"pattern":{"anyOf":[{"equals":"critical"},{"equals":"warning"}]},"matched":false,` +
+		`"sub":[{"pattern":{"equals":"critical"},"matched":false},{"pattern":{"equals":"warning"},"matched":false}]}},` +
+		`{"path":"status","values":["FIRING"],"result":{"pattern":{"equals":"firing"},"matched":true,"values":["FIRING"]}}]}`
+	if string(data) != want {
+		t.Errorf("Marshal =\n%s\nwant\n%s", data, want)
+	}
+	var decoded Explanation
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded, e) {
+		t.Errorf("round trip gave %+v, want %+v", decoded, e)
 	}
 }
 

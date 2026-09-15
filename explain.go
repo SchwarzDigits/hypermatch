@@ -9,29 +9,32 @@ import (
 )
 
 // Explanation describes how a rule matches an event, condition by condition.
+// Its JSON form, for example for a user interface, uses the field names in
+// lower camel case and omits empty fields.
 type Explanation struct {
-	Matched    bool              // the event matches the rule
-	Conditions []ConditionResult // one per condition of the rule, in its order
+	Matched    bool              `json:"matched"`    // the event matches the rule
+	Conditions []ConditionResult `json:"conditions"` // one per condition of the rule, in its order
 }
 
 // ConditionResult describes how a condition of a rule matches an event.
 type ConditionResult struct {
-	Path   string
-	Values []string // the values of the property, or nil if it is absent
-	Result PatternResult
+	Path   string        `json:"path"`
+	Absent bool          `json:"absent,omitempty"` // the event has no value at Path
+	Values []string      `json:"values,omitempty"` // the values of the property
+	Result PatternResult `json:"result"`
 }
 
 // PatternResult describes how a pattern matches the values of a property.
 type PatternResult struct {
-	Pattern Pattern
-	Matched bool
+	Pattern Pattern `json:"pattern"`
+	Matched bool    `json:"matched"`
 
 	// Values are the values that match the pattern. For anythingBut, they
 	// are the values that match one of its sub-patterns and so exclude the
 	// event.
-	Values []string
+	Values []string `json:"values,omitempty"`
 
-	Sub []PatternResult // for anyOf, allOf and anythingBut
+	Sub []PatternResult `json:"sub,omitempty"` // for anyOf, allOf and anythingBut
 }
 
 // Explain reports how rule matches event, condition by condition. It follows
@@ -57,7 +60,7 @@ func Explain(rule ConditionSet, event []Property) (Explanation, error) {
 		if len(vs) == 0 && c.Pattern.Type != PatternExists {
 			r.Matched = false // only {"exists": false} matches absent properties
 		}
-		e.Conditions[i] = ConditionResult{Path: c.Path, Values: vs, Result: r}
+		e.Conditions[i] = ConditionResult{Path: c.Path, Absent: len(vs) == 0, Values: vs, Result: r}
 		e.Matched = e.Matched && r.Matched
 	}
 	return e, nil
@@ -201,7 +204,7 @@ func (e Explanation) String() string {
 	for _, c := range e.Conditions {
 		fmt.Fprintf(&b, "  %s %s: %s", mark(c.Result.Matched), c.Path, patternText(c.Result.Pattern))
 		switch {
-		case c.Values == nil:
+		case c.Absent:
 			b.WriteString(" (absent)")
 		case c.Result.Pattern.Type == PatternExists:
 			b.WriteString(" (present)")
@@ -213,7 +216,7 @@ func (e Explanation) String() string {
 			fmt.Fprintf(&b, " (values %q)", c.Values)
 		}
 		b.WriteByte('\n')
-		if c.Values != nil {
+		if !c.Absent {
 			writeSubResults(&b, c.Result.Sub, "      ")
 		}
 	}

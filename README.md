@@ -490,7 +490,30 @@ no match
   ✓ owner: {"exists":false} (absent)
 ```
 
-The `Explanation` holds the same information in fields, for example to show it in a user interface. `Explain` follows exactly the semantics of `Match`, but it is meant for debugging rather than speed.
+`Explain` follows exactly the semantics of `Match`, but it is meant for debugging rather than speed.
+
+For a user interface, the `Explanation` holds the same information in fields and encodes to JSON:
+
+```javascript
+{
+  "matched": false,
+  "conditions": [
+    {"path": "status", "values": ["FIRING"],
+     "result": {"pattern": {"equals": "firing"}, "matched": true, "values": ["FIRING"]}},
+    {"path": "severity", "values": ["info"],
+     "result": {"pattern": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}, "matched": false,
+                "sub": [{"pattern": {"equals": "critical"}, "matched": false},
+                        {"pattern": {"equals": "warning"}, "matched": false}]}},
+    {"path": "owner", "absent": true,
+     "result": {"pattern": {"exists": false}, "matched": true}}
+  ]
+}
+```
+
+- **`matched`** tells whether a condition, pattern or sub-pattern holds.
+- **`values`** on a condition lists the values of the property. On a pattern, it lists the values that matched it, or for `anythingBut` the values that excluded the event.
+- **`absent`** marks properties the event does not contain.
+- **`sub`** holds the results of the sub-patterns of `anyOf`, `allOf` and `anythingBut`.
 
 # Performance
 
