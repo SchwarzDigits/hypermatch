@@ -194,7 +194,11 @@ func genJSONValue(src source, b *strings.Builder, depth int) {
 	case 2: // raw, possibly invalid UTF-8
 		b.WriteByte('"')
 		for range src.intn(4) {
-			b.WriteString(genRunes[src.intn(len(genRunes))])
+			r := genRunes[src.intn(len(genRunes))]
+			if r == `\` {
+				r = `\\`
+			}
+			b.WriteString(r)
 		}
 		b.WriteByte('"')
 	case 3:

@@ -119,6 +119,9 @@ func TestGlobMatch(t *testing.T) {
 		{"a*b*c", "abc", true}, {"a*b*c", "aXbYc", true}, {"a*b*c", "acb", false},
 		{"*", "", true}, {"*x*", "axb", true}, {"*x*", "ab", false}, {"a*a", "aa", true},
 		{"ab", "ab", true}, {"ab", "abc", false}, {"*-mon-*", "s1-mon-mon-mon-test", true},
+		{"a*a", "a", false}, {"*ab*b", "abb", true}, {"*ab*b", "ab", false}, {"*a*a*", "aa", true},
+		{`a\*b`, "a*b", true}, {`a\*b`, "axb", false}, {`*\**`, "x*y", true}, {`*\**`, "xy", false},
+		{`\\*`, `\x`, true}, {`\\*`, "x", false}, {`a\\\*`, `a\*`, true}, {`\**\*`, "*x", false},
 	} {
 		if got := globMatch(tt.pattern, tt.s); got != tt.want {
 			t.Errorf("globMatch(%q, %q) = %v, want %v", tt.pattern, tt.s, got, tt.want)

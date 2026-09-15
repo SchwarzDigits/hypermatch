@@ -280,7 +280,7 @@ If the attribute value is type of:
 - **String**: Checks if the value ends with "ing"
 - **String array**: Checks if the array contains an element that ends with "ing"
 
-In `equals`, `prefix` and `suffix` patterns, `*` is an ordinary character.
+In `equals`, `prefix` and `suffix` patterns, `*` and `\` are ordinary characters.
 
 ### "wildcard" matching
 The `wildcard` condition uses wildcards to match the value of an attribute, ignoring case.
@@ -288,6 +288,7 @@ The `wildcard` condition uses wildcards to match the value of an attribute, igno
 - Use `*` as a wildcard to match any number of characters (including none).
 - You cannot place wildcards directly next to each other.
 - The pattern `*` matches every value.
+- Use `\*` to match a literal `*` and `\\` to match a literal `\`. No other character may follow a backslash. In JSON, every backslash is itself written as `\\`, so `{"wildcard": "*\\**"}` is the pattern `*\**`, which matches values that contain a `*`.
 
 ```javascript
 {

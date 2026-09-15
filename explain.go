@@ -159,31 +159,28 @@ func valueMatches(p Pattern, v string) bool {
 	return false
 }
 
-// globMatch reports whether s matches pattern, in which '*' matches any
-// sequence of bytes.
+// globMatch reports whether s matches the valid wildcard pattern, in which
+// '*' matches any sequence of bytes and `\*` and `\\` match '*' and '\'.
 func globMatch(pattern, s string) bool {
-	p, i := 0, 0
-	star, mark := -1, 0
-	for i < len(s) {
-		switch {
-		case p < len(pattern) && pattern[p] == '*':
-			star, mark = p, i
-			p++
-		case p < len(pattern) && pattern[p] == s[i]:
-			p++
-			i++
-		case star >= 0:
-			p = star + 1
-			mark++
-			i = mark
-		default:
+	parts, _ := splitWildcard(pattern)
+	if len(parts) == 1 {
+		return s == parts[0]
+	}
+	first, last := parts[0], parts[len(parts)-1]
+	if len(s) < len(first)+len(last) || !strings.HasPrefix(s, first) || !strings.HasSuffix(s, last) {
+		return false
+	}
+	// Matching every part in between as early as possible leaves the most
+	// room for the parts after it.
+	s = s[len(first) : len(s)-len(last)]
+	for _, p := range parts[1 : len(parts)-1] {
+		i := strings.Index(s, p)
+		if i < 0 {
 			return false
 		}
+		s = s[i+len(p):]
 	}
-	for p < len(pattern) && pattern[p] == '*' {
-		p++
-	}
-	return p == len(pattern)
+	return true
 }
 
 // String returns a readable account of the explanation, for example:

@@ -120,10 +120,11 @@ func normalizePattern(p *Pattern) (*expr, error) {
 		case PatternSuffix:
 			return newLeaf(leafSuffix, v), nil
 		}
-		if strings.Contains(v, "**") {
-			return nil, fmt.Errorf("[%s] must not contain two consecutive wildcards", p.Type)
+		parts, err := splitWildcard(v)
+		if err != nil {
+			return nil, fmt.Errorf("[%s] %w", p.Type, err)
 		}
-		return wildcardLeaf(v), nil
+		return wildcardLeaf(v, parts), nil
 	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternNumericEquals:
 		v, err := numericBound(p)
 		if err != nil {
@@ -245,23 +246,50 @@ func betweenInterval(p *Pattern) (numInterval, error) {
 	return iv, nil
 }
 
-// wildcardLeaf returns the cheapest leaf equivalent to the folded wildcard
-// pattern v.
-func wildcardLeaf(v string) *expr {
-	if v == "*" {
-		return newLeaf(leafExists, "")
+// splitWildcard returns the literal parts of the wildcard pattern v between
+// its wildcards, with escapes resolved: `a*b\*c` has the parts "a" and
+// "b*c", and a pattern without wildcards has a single part.
+func splitWildcard(v string) ([]string, error) {
+	parts := make([]string, 0, 2)
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch c {
+		case '*':
+			parts = append(parts, b.String())
+			b.Reset()
+			continue
+		case '\\':
+			if i+1 == len(v) || (v[i+1] != '*' && v[i+1] != '\\') {
+				return nil, errors.New(`contains an invalid escape: use \* for a literal * and \\ for a literal \`)
+			}
+			i++
+			c = v[i]
+		}
+		b.WriteByte(c)
 	}
-	core, lead := strings.CutPrefix(v, "*")
-	core, trail := strings.CutSuffix(core, "*")
+	parts = append(parts, b.String())
+	if len(parts) > 2 && slices.Contains(parts[1:len(parts)-1], "") {
+		return nil, errors.New("must not contain two consecutive wildcards")
+	}
+	return parts, nil
+}
+
+// wildcardLeaf returns the cheapest leaf equivalent to the folded wildcard
+// pattern v, whose literal parts are parts.
+func wildcardLeaf(v string, parts []string) *expr {
+	first, last := parts[0], parts[len(parts)-1]
 	switch {
-	case strings.Contains(core, "*"):
+	case len(parts) == 1:
+		return newLeaf(leafEquals, first)
+	case len(parts) > 2:
 		return newLeaf(leafGlob, v)
-	case !lead && !trail:
-		return newLeaf(leafEquals, core)
-	case !lead:
-		return newLeaf(leafPrefix, core)
-	case !trail:
-		return newLeaf(leafSuffix, core)
+	case first == "" && last == "":
+		return newLeaf(leafExists, "")
+	case first == "":
+		return newLeaf(leafSuffix, last)
+	case last == "":
+		return newLeaf(leafPrefix, first)
 	}
 	return newLeaf(leafGlob, v)
 }

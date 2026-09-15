@@ -174,20 +174,25 @@ func refSatisfies(p Pattern, values []string) bool {
 }
 
 // refGlob reports whether s matches pattern, in which '*' matches any
-// sequence of bytes.
+// sequence of bytes and a backslash makes the next byte literal.
 func refGlob(pattern, s string) bool {
 	// dp[j] reports whether the pattern read so far matches s[:j].
 	dp := make([]bool, len(s)+1)
 	dp[0] = true
 	for i := 0; i < len(pattern); i++ {
-		if pattern[i] == '*' {
+		c := pattern[i]
+		if c == '*' {
 			for j := 1; j <= len(s); j++ {
 				dp[j] = dp[j] || dp[j-1]
 			}
 			continue
 		}
+		if c == '\\' {
+			i++
+			c = pattern[i]
+		}
 		for j := len(s); j >= 1; j-- {
-			dp[j] = dp[j-1] && s[j-1] == pattern[i]
+			dp[j] = dp[j-1] && s[j-1] == c
 		}
 		dp[0] = false
 	}
@@ -219,9 +224,9 @@ var (
 	// because paths are case-sensitive.
 	genPaths = []string{"a", "b", "c", "A"}
 	// genRunes contains upper case, non-ASCII, the Kelvin sign (which
-	// folds to the one-byte "k"), invalid UTF-8 and, as last element, "*",
-	// which is literal in values and in non-wildcard patterns.
-	genRunes = []string{"a", "b", "A", "-", "ä", "Ä", "K", "k", "\xff", "*"}
+	// folds to the one-byte "k"), invalid UTF-8, and `\` and "*", which are
+	// literal in values and in non-wildcard patterns.
+	genRunes = []string{"a", "b", "A", "-", "ä", "Ä", "K", "k", "\xff", `\`, "*"}
 )
 
 func genString(src source, maxLen int) string {
@@ -248,7 +253,11 @@ func genWildcard(src source) string {
 			star = true
 			continue
 		}
-		b.WriteString(genRunes[src.intn(len(genRunes)-1)])
+		r := genRunes[src.intn(len(genRunes))]
+		if r == `\` || r == "*" {
+			b.WriteByte('\\') // a literal, which must be escaped
+		}
+		b.WriteString(r)
 		star = false
 	}
 	return b.String()

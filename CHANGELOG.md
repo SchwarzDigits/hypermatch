@@ -7,8 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 - The numeric pattern `eq`, which matches numbers equal to its value in any notation, such as `500`, `500.0` and `5e2`.
 - `ConditionResult.Absent` reports whether the event has no value at the path of a condition.
+- In wildcard patterns, `\*` matches a literal `*` and `\\` a literal `\`.
 
 ### Changed
+- In wildcard patterns, a backslash must be followed by `*` or `\`: wildcard patterns with other backslashes are rejected, and patterns containing `\*` or `\\` match differently than before.
 - `between` and `eq` patterns are found by binary search. Many of them on the same path no longer slow matching down.
 - The JSON form of `Explanation` uses lower camel case field names and omits empty fields, which makes it easy to use in user interfaces.
 

@@ -355,6 +355,9 @@ func TestInvalidRules(t *testing.T) {
 		{"suffix with sub-patterns", ConditionSet{cond("f", Pattern{Type: PatternSuffix, Value: "a", Sub: []Pattern{equalsP("b")}})}, "[suffix] must not contain sub-patterns"},
 		{"wildcard without value", ConditionSet{cond("f", Pattern{Type: PatternWildcard})}, "[wildcard] must contain a value"},
 		{"consecutive wildcards", ConditionSet{cond("f", wildcardP("a**b"))}, "[wildcard] must not contain two consecutive wildcards"},
+		{"consecutive wildcards after an escape", ConditionSet{cond("f", wildcardP(`\\**`))}, "[wildcard] must not contain two consecutive wildcards"},
+		{"invalid escape", ConditionSet{cond("f", wildcardP(`a\b*`))}, "[wildcard] contains an invalid escape"},
+		{"trailing backslash", ConditionSet{cond("f", wildcardP(`a*\`))}, "[wildcard] contains an invalid escape"},
 		{"anyOf with value", ConditionSet{cond("f", Pattern{Type: PatternAnyOf, Value: "a", Sub: []Pattern{equalsP("b")}})}, "[anyOf] must not contain a value"},
 		{"anyOf without sub-patterns", ConditionSet{cond("f", Pattern{Type: PatternAnyOf})}, "[anyOf] must contain sub-patterns"},
 		{"allOf without sub-patterns", ConditionSet{cond("f", Pattern{Type: PatternAllOf, Sub: []Pattern{}})}, "[allOf] must contain sub-patterns"},
@@ -386,9 +389,41 @@ func TestValidRules(t *testing.T) {
 		{cond("f", equalsP("**"))},
 		{cond("f", wildcardP("*")), cond("f", wildcardP("*a*b*"))},
 		{cond("f", anythingButP(anyOfP(allOfP(equalsP("a")))))},
+		{cond("f", wildcardP(`a\**`))}, // a literal "*" before a wildcard
+		{cond("f", prefixP(`a\b`))},    // "\" is literal in prefix, suffix and equals
 	} {
 		if err := ValidateRule(rule); err != nil {
 			t.Errorf("ValidateRule(%s) = %v", fmtRule(rule), err)
+		}
+	}
+}
+
+func TestWildcardEscapes(t *testing.T) {
+	tests := []struct {
+		pattern, value string
+		want           bool
+	}{
+		{`*\**`, "a*b", true},
+		{`*\**`, "ab", false},
+		{`a\*`, "a*", true},
+		{`a\*`, "ab", false},
+		{`*.\*`, "file.*", true},
+		{`C:\\Users\\*`, `c:\users\me`, true},
+		{`C:\\Users\\*`, `C:\Users`, false},
+		{`*\\`, `x\`, true},
+		{`\**\*`, "*x*", true},
+		{`\**\*`, "*x", false},
+	}
+	for _, tt := range tests {
+		rule := ConditionSet{cond("f", wildcardP(tt.pattern))}
+		event := []Property{prop("f", tt.value)}
+		h := New[int]()
+		mustAdd(t, h, 1, rule...)
+		if got := len(h.Match(event)) == 1; got != tt.want {
+			t.Errorf("wildcard %s on %q: Match = %v, want %v", tt.pattern, tt.value, got, tt.want)
+		}
+		if got := refMatches(rule, event); got != tt.want {
+			t.Errorf("wildcard %s on %q: reference = %v, want %v", tt.pattern, tt.value, got, tt.want)
 		}
 	}
 }
