@@ -16,7 +16,13 @@
 // Rules are compiled into a trie of shared conditions backed by hash and
 // automaton indexes, so the cost of matching an event depends on the event
 // and on the rules it matches, and hardly on the total number of rules.
-// [HyperMatch] is safe for concurrent use, and Match is lock-free.
+// [HyperMatch] is safe for concurrent use, and Match is lock-free. Rules can
+// be added and removed at any time with [HyperMatch.AddRule] and
+// [HyperMatch.RemoveRule].
+//
+// Events that arrive as JSON can be matched directly with
+// [HyperMatch.MatchJSON], which decodes only the values rules refer to.
+// Nested objects become paths joined with ".".
 //
 // Rules can also be written as JSON (see [ConditionSet.UnmarshalJSON]):
 //

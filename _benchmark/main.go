@@ -24,12 +24,14 @@ type Candidate interface {
 	Match(number int, modulo int) int
 }
 
-var candidateNames = []string{"hypermatch", "hypermatch-json", "quamina"}
+var candidateNames = []string{"hypermatch", "hypermatch-matchjson", "hypermatch-json", "quamina"}
 
 func newCandidate(name string, wildcard bool) Candidate {
 	switch name {
 	case "hypermatch":
 		return candidates.NewHypermatch(wildcard)
+	case "hypermatch-matchjson":
+		return candidates.NewHypermatchMatchJSON(wildcard)
 	case "hypermatch-json":
 		return candidates.NewHypermatchJson(wildcard)
 	case "quamina":

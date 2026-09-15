@@ -98,3 +98,45 @@ func ExampleValidateRule() {
 	// true
 	// hypermatch: invalid rule: condition "name": anyOf[1]: [wildcard] must not contain two consecutive wildcards
 }
+
+func ExampleHyperMatch_MatchJSON() {
+	hm := hypermatch.New[string]()
+	err := hm.AddRule("shop-team", hypermatch.ConditionSet{
+		{Path: "alert.labels.team", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "shop"}},
+		{Path: "status", Pattern: hypermatch.Pattern{Type: hypermatch.PatternAnyOf, Sub: []hypermatch.Pattern{
+			{Type: hypermatch.PatternEquals, Value: "firing"},
+			{Type: hypermatch.PatternEquals, Value: "pending"},
+		}}},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	matches, err := hm.MatchJSON([]byte(`{
+		"status": "FIRING",
+		"alert": {"labels": {"team": "shop", "severity": "critical"}},
+		"tags": ["checkout", "backend"]
+	}`))
+	fmt.Println(matches, err)
+	// Output: [shop-team] <nil>
+}
+
+func ExampleHyperMatch_RemoveRule() {
+	hm := hypermatch.New[string]()
+	for _, team := range []string{"shop", "search"} {
+		err := hm.AddRule(team, hypermatch.ConditionSet{
+			{Path: "team", Pattern: hypermatch.Pattern{Type: hypermatch.PatternPrefix, Value: "s"}},
+		})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	event := []hypermatch.Property{{Path: "team", Values: []string{"shop"}}}
+	fmt.Println(hm.Match(event))
+	hm.RemoveRule("shop")
+	fmt.Println(hm.Match(event))
+	// Output:
+	// [shop search]
+	// [search]
+}
