@@ -1,6 +1,7 @@
 package hypermatch
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -237,6 +238,96 @@ func heapAlloc() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return m.HeapAlloc
+}
+
+// jsonEvent encodes an event of a benchmark workload as a JSON object.
+func jsonEvent(event []Property) []byte {
+	m := make(map[string]any, len(event))
+	for _, p := range event {
+		if len(p.Values) == 1 {
+			m[p.Path] = p.Values[0]
+		} else {
+			m[p.Path] = p.Values
+		}
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func jsonBenchEvents(w benchWorkload, n int) [][]byte {
+	var events [][]byte
+	for _, e := range benchEvents(w, n) {
+		events = append(events, jsonEvent(e))
+	}
+	return events
+}
+
+// BenchmarkMatchJSON matches the events of the workloads encoded as JSON.
+func BenchmarkMatchJSON(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
+			h := newBenchMatcher(b, w, n)
+			events := jsonBenchEvents(w, n)
+			if got, err := h.MatchJSON(events[0]); err != nil || len(got) != w.wantMatches {
+				b.Fatalf("MatchJSON = %v, %v, want %d matches", got, err, w.wantMatches)
+			}
+			runtime.GC()
+			b.ReportAllocs()
+			var matches, i int
+			for b.Loop() {
+				got, _ := h.MatchJSON(events[i%len(events)])
+				matches += len(got)
+				i++
+			}
+			benchSink.Add(int64(matches))
+		})
+	}
+}
+
+// BenchmarkUnmarshalAndMatch decodes the JSON events of BenchmarkMatchJSON
+// with encoding/json and matches the result, which MatchJSON replaces.
+func BenchmarkUnmarshalAndMatch(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		if w.name != "mixed" && w.name != "equals" {
+			continue
+		}
+		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
+			h := newBenchMatcher(b, w, n)
+			events := jsonBenchEvents(w, n)
+			runtime.GC()
+			b.ReportAllocs()
+			var matches, i int
+			for b.Loop() {
+				var m map[string]any
+				if err := json.Unmarshal(events[i%len(events)], &m); err != nil {
+					b.Fatal(err)
+				}
+				props := make([]Property, 0, len(m))
+				for k, v := range m {
+					switch v := v.(type) {
+					case string:
+						props = append(props, Property{Path: k, Values: []string{v}})
+					case []any:
+						values := make([]string, 0, len(v))
+						for _, x := range v {
+							if s, ok := x.(string); ok {
+								values = append(values, s)
+							}
+						}
+						props = append(props, Property{Path: k, Values: values})
+					}
+				}
+				matches += len(h.Match(props))
+				i++
+			}
+			benchSink.Add(int64(matches))
+		})
+	}
 }
 
 // BenchmarkMatchWithRemovedRules measures the mixed workload after removing

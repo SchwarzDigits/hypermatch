@@ -15,8 +15,25 @@ import (
 // once.
 
 type trie struct {
-	root    state
-	edgeSeq uint64 // writer only
+	root     state
+	paths    strMap[string]   // the path of every condition, for MatchJSON
+	prefixes strMap[struct{}] // the parts of these paths before each "."
+	edgeSeq  uint64           // writer only
+}
+
+// addPath records path and its prefixes for MatchJSON. Writer only.
+func (t *trie) addPath(path string) {
+	if _, ok := t.paths.get(path); ok {
+		return
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '.' {
+			if _, ok := t.prefixes.get(path[:i]); !ok {
+				t.prefixes.put(path[:i], struct{}{})
+			}
+		}
+	}
+	t.paths.put(path, path)
 }
 
 type state struct {
@@ -179,6 +196,7 @@ func (t *trie) follow(s *state, c condition) *state {
 		}
 		s.groups.put(c.path, g)
 		s.glist.add(g)
+		t.addPath(c.path)
 	}
 	if e := g.byKey[c.expr.key].edge; e != nil {
 		return e.next
@@ -268,6 +286,11 @@ type scratch struct {
 	out      []uint32
 	globCur  []*globNode
 	globNext []*globNode
+
+	// MatchJSON only.
+	jvals []jval // values found, before they are grouped into spans
+	pbuf  []byte // path of the current JSON value
+	jtmp  []byte // decoded strings that are not needed
 }
 
 // property is an event property with at least one value.
@@ -303,12 +326,7 @@ func (sc *scratch) reset(event []Property) {
 	for size < 2*len(event) {
 		size *= 2
 	}
-	if cap(sc.slots) < size {
-		sc.slots = make([]int32, size)
-	} else {
-		sc.slots = sc.slots[:size]
-		clear(sc.slots)
-	}
+	sc.initSlots(size)
 	mask := uint64(size - 1)
 	for i := range event {
 		p := &event[i]
@@ -335,6 +353,16 @@ func (sc *scratch) reset(event []Property) {
 	sc.fbuf = sc.fbuf[:0]
 	sc.frefs = sc.frefs[:0]
 	sc.out = sc.out[:0]
+}
+
+// initSlots empties the span table and resizes it to size slots.
+func (sc *scratch) initSlots(size int) {
+	if cap(sc.slots) < size {
+		sc.slots = make([]int32, size)
+	} else {
+		sc.slots = sc.slots[:size]
+		clear(sc.slots)
+	}
 }
 
 func (sc *scratch) release() {

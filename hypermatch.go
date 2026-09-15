@@ -186,22 +186,35 @@ func (h *HyperMatch[T]) AppendMatches(dst []T, event []Property) []T {
 	if len(sc.spans) > 0 {
 		sc.visit(&tab.root)
 	}
-	if out := sc.out; len(out) > 0 {
-		if len(out) > 1 {
-			slices.Sort(out)
-			out = slices.Compact(out)
-		}
-		// Loaded after the traversal, so every rule number found resolves.
-		ids := tab.ids.load()
-		removed := tab.removed.load()
-		dst = slices.Grow(dst, len(out))
+	dst = tab.results(dst, sc)
+	sc.release()
+	return dst
+}
+
+// results appends the identifiers of the rules sc matched to dst.
+func (tab *table[T]) results(dst []T, sc *scratch) []T {
+	out := sc.out
+	if len(out) == 0 {
+		return dst
+	}
+	if len(out) > 1 {
+		slices.Sort(out)
+		out = slices.Compact(out)
+	}
+	// Loaded after the traversal, so every rule number found resolves.
+	ids := tab.ids.load()
+	dst = slices.Grow(dst, len(out))
+	if removed := tab.removed.load(); removed != nil {
 		for _, n := range out {
 			if !bitsHas(removed, n) {
 				dst = append(dst, ids[n])
 			}
 		}
+		return dst
 	}
-	sc.release()
+	for _, n := range out {
+		dst = append(dst, ids[n])
+	}
 	return dst
 }
 
