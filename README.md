@@ -10,15 +10,26 @@
 ![hypermatch logo](./logo/logo-small.png)
 
 # Introduction
-Hypermatch is a high-performance Go library that enables rapid matching of a large number of rules against events. Designed for speed and efficiency, hypermatch handles thousands of events per second with low latency, making it ideal for real-time systems.
+Hypermatch is a high-performance Go library that matches events against large sets of rules. Rules are compiled into a shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
-- **Fast Matching**: Matches events to a large set of rules in-memory with minimal delay  ... [it's really fast! (Benchmark)](_benchmark/benchmark.md)
-- **Readable Rule Format**: Serialize rules into human-readable JSON objects.
-- **Flexible Rule Syntax**: Supports various matching conditions, including equals, prefix, suffix, wildcard, anything-but, all-of, and any-of.
+- **Fast**: Matches an event against 100,000 rules in about half a microsecond on a single core, and 14 million events per second on 14 cores. [Benchmarks](#performance)
+- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added.
+- **Correct**: The matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
+- **Readable Rule Format**: Write rules in Go or as human-readable JSON objects.
+- **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, anything-but, all-of and any-of conditions, which can be nested freely.
+- **No Dependencies**: Only the Go standard library.
 
 An event consists of a list of fields, provided as name/value pairs. A rule links these event fields to patterns that determine whether the event matches.
 
 ![example](./example.png)
+
+# Installation
+
+```sh
+go get github.com/SchwarzDigits/hypermatch
+```
+
+Hypermatch requires Go 1.24 or later.
 
 # Quick Start
 
@@ -78,19 +89,36 @@ An event is represented as a JSON object with various fields. Here’s a sample 
 }
 ```
 
+In Go, an event is a slice of `Property` values, each consisting of a path and its values:
+
+```go
+event := []hypermatch.Property{
+    {Path: "name", Values: []string{"Too many parallel requests on system xy"}},
+    {Path: "severity", Values: []string{"critical"}},
+    {Path: "status", Values: []string{"firing"}},
+    {Path: "tags", Values: []string{"shop", "backend"}},
+    // ...
+}
+```
+
 **This example will be referenced throughout the documentation.**
 
 ## Matching Basics
 
-Rules in Hypermatch are composed of conditions defined by the `ConditionSet` type.
-
-- **Case-Insensitive Matching**: All value comparisons are case-insensitive.
-- **Supported Types**: Currently, only strings and string arrays are supported.
+Rules in Hypermatch are composed of conditions defined by the `ConditionSet` type. An event matches a rule if it matches **all** of its conditions.
 
 Each condition includes:
 
 - **Path**: The field in the event to match against.
 - **Pattern**: The pattern used to match the value at the specified path.
+
+The following rules apply to all conditions:
+
+- **Case-Insensitive Values**: All value comparisons are case-insensitive, including non-ASCII letters (`"ÄRGER"` equals `"ärger"`).
+- **Case-Sensitive Paths**: `"Name"` and `"name"` are different paths, just like keys in JSON.
+- **Supported Types**: Values are strings or string arrays.
+- **Missing Properties**: A condition never matches a property that is absent from the event. This includes `anythingBut`. A property without values counts as absent.
+- **Repeated Paths**: Several properties with the same path in an event act as one property with all their values. Several conditions on the same path in a rule must all match, just like `allOf`.
 
 Here’s an example rule that matches the event above:
 
@@ -155,6 +183,8 @@ The rules and conditions are also expressible as JSON objects. The following JSO
 }
 ```
 
+`ConditionSet`, `Condition` and `Pattern` implement `json.Marshaler` and `json.Unmarshaler`, so you can store rules as JSON and load them with `json.Unmarshal`. Unknown pattern types are rejected when decoding.
+
 **Note**: For simplicity, all examples in this documentation will be presented in JSON format.
 
 ## Matching syntax
@@ -206,11 +236,14 @@ If the attribute value is type of:
 - **String**: Checks if the value ends with "ing"
 - **String array**: Checks if the array contains an element that ends with "ing"
 
+In `equals`, `prefix` and `suffix` patterns, `*` is an ordinary character.
+
 ### "wildcard" matching
 The `wildcard` condition uses wildcards to match the value of an attribute, ignoring case.
 
-- Use * as a wildcard to match any number of characters (including none).
+- Use `*` as a wildcard to match any number of characters (including none).
 - You cannot place wildcards directly next to each other.
+- The pattern `*` matches every value.
 
 ```javascript
 {
@@ -226,13 +259,14 @@ If the attribute value is type of:
 - **String array**: Checks if any value in the array matches the pattern
 
 ### "anythingBut" matching
-The `anythingBut` condition negates the match, triggering only if the specified condition is not met.
+The `anythingBut` condition negates the match, triggering only if none of the specified patterns matches. It accepts any patterns, including prefixes, wildcards and nested `anyOf` or `allOf` patterns.
 
 ```javascript
 {
     "status": {
         "anythingBut": [
-            {"equals": "firing"}
+            {"equals": "firing"},
+            {"prefix": "pending"}
         ]
     }
 }
@@ -240,8 +274,10 @@ The `anythingBut` condition negates the match, triggering only if the specified 
 
 If the attribute value is type of:
 
-- **String**: Checks if the value is anything other than "firing"
-- **String array**: Checks if the array does *not* contain an element equal to "firing"
+- **String**: Checks if the value is neither "firing" nor starts with "pending"
+- **String array**: Checks if *no* element of the array is "firing" or starts with "pending"
+
+Like every condition, `anythingBut` only matches events that contain the attribute.
 
 ### "anyOf" matching
 `anyOf` does correspond to a boolean "inclusive-or". It checks multiple conditions and matches if **any** of the conditions are true.
@@ -278,14 +314,86 @@ If the attribute value is type of:
 
 If the attribute value is type of:
 
-- **String**: This condition makes no sense, as it checks if the value is equal to "shop" and "backend"
+- **String**: Checks if the value matches all conditions, for example `{"allOf": [{"prefix": "web"}, {"suffix": "shop"}]}`
 - **String array**: Checks if the array contains both "shop" and "backend"
 
+## Rule Identifiers
+
+`HyperMatch[T]` identifies rules by values of any comparable type `T`, such as strings, integers or structs.
+
+- `Match` returns the identifiers of all matching rules in the order in which they were first added, each at most once, or `nil` if no rule matches.
+- Adding several condition sets under the same identifier combines them with a boolean "or": the identifier matches if any of its condition sets matches.
+- `RuleCount` returns the number of distinct identifiers.
+
+## Validation
+
+`AddRule` validates every rule and rejects invalid rules without changing the matcher. Use `ValidateRule` to check a rule without adding it, for example when rules are submitted through an API. All validation errors wrap `ErrInvalidRule` and describe the location of the problem:
+
+```go
+err := hypermatch.ValidateRule(rule)
+if errors.Is(err, hypermatch.ErrInvalidRule) {
+    // hypermatch: invalid rule: condition "name": anyOf[1]: [wildcard] must not contain two consecutive wildcards
+}
+```
+
+## Concurrency
+
+All methods of `HyperMatch` are safe for concurrent use:
+
+- `Match` never blocks. It runs lock-free and scales with the number of cores, even while other goroutines add rules.
+- `AddRule` calls are serialized. A rule is visible to every `Match` call that starts after its `AddRule` call returned.
+
+The zero value of `HyperMatch` is ready to use.
+
+## Allocation-free Matching
+
+`Match` allocates only the slice it returns. `AppendMatches` appends to a slice you provide, so matching does not allocate at all when you reuse it:
+
+```go
+var matches []string
+for _, event := range events {
+    matches = hm.AppendMatches(matches[:0], event)
+    // ...
+}
+```
 
 # Performance
 
-**hypermatch** is designed to be blazing fast with very large numbers of rules.
-Nevertheless, there are a few things to consider to get maximum performance:
-- Shorten the number of fields inside the rules, the fewer conditions, the shorter is the path to find them out.
-- Try to make the **paths** as diverse as possible in events and rules. The more heterogeneous fields, the higher the performance.
-- Reduce the number of **anyOf** conditions wherever possible
+The table compares hypermatch with its previous version 1.0.2. Every workload uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are means of six runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+
+| Workload | Rules | v1.0.2 | Now | Speed-up |
+|---|---|---:|---:|---:|
+| mixed | 6 conditions using all pattern types; 10 rules match each event | 15.5 µs | 0.54 µs | 29x |
+| nearmiss | Same rules; the events fail only at the last condition | 13.7 µs | 0.45 µs | 30x |
+| equals | 2 `equals` conditions; events with 6 properties | 0.87 µs | 0.17 µs | 5x |
+| wildcard | A different `*-appN-*` wildcard per rule | 1.10 µs | 0.34 µs | 3x |
+| prefix | A different URL prefix per rule | 30.5 ms | 0.20 µs | 155,000x |
+| anythingbut | 100 exclusion rules per service; 99 match each event | 71.1 ms | 4.33 µs | 16,000x |
+
+- **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload takes 72 ns per event, which is 14 million events per second (v1.0.2: 1.9 µs).
+- **Allocations**: `Match` allocates only the slice it returns (v1.0.2: 11 to 100,000 allocations per event), and `AppendMatches` does not allocate at all.
+- **Memory**: A rule takes 285 to 431 bytes (v1.0.2: 490 to 6,893 bytes).
+- **Adding rules**: Adding 10,000 rules takes 4 to 10 ms, between 0.8 (wildcard) and 13 (prefix) times as fast as v1.0.2.
+
+The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch and [quamina](https://github.com/timbray/quamina), on a single goroutine:
+
+| Rules | hypermatch | quamina |
+|---|---:|---:|
+| With a wildcard condition | 1,490,000 events/s | 4 events/s |
+| Without the wildcard condition | 1,860,000 events/s | 31,800 events/s |
+
+Things to consider to get maximum performance:
+- Rules that share conditions are evaluated together. Conditions are ordered by path, so conditions on alphabetically early paths that many rules have in common, such as `"env": {"equals": "prod"}`, are checked only once per event.
+- `equals`, `prefix`, `suffix` and wildcards of the form `abc*` or `*abc` are hash lookups. Other wildcards run through an automaton, which is still fast, but costs a little more.
+- `anythingBut` conditions are checked for every event that contains their path. Many *different* `anythingBut` conditions at the same position therefore cost time proportional to their number.
+- Reuse result slices with `AppendMatches`.
+
+# Migrating from v1
+
+- Create matchers with `hypermatch.New[T]()` instead of `hypermatch.NewHyperMatch()`. `RuleIdentifier` no longer exists: choose the identifier type, for example `New[string]()`, or `New[any]()` for the old behavior.
+- `Match` returns the identifiers in the order in which the rules were added, each at most once, and `nil` if nothing matches. It no longer reorders the event.
+- `AddRule` validates rules and returns an error wrapping `ErrInvalidRule` for unknown pattern types, empty paths, `anythingBut` without sub-patterns and non-comparable identifiers. Such rules could previously panic or match more events than intended. It no longer reorders the condition set.
+- `anythingBut` on string arrays now matches only if *no* element matches, as documented. Version 1 matched as soon as one element did not match.
+- Several bugs where rules with wildcard, prefix or suffix patterns caused other rules to match wrong events are fixed.
+- `ValidateRule` rejects empty condition sets, like `AddRule` always did.
+- Decoding JSON rejects unknown pattern types and patterns or conditions with more than one key. Decoded condition sets are sorted by path, and encoding merges several conditions on the same path into an `allOf` pattern.

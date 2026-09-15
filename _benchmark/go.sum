@@ -1,8 +1,2 @@
-github.com/SchwarzIT/hypermatch v0.1.0 h1:ytJivIAFP++88WaiIFD/7+yl6Yz4gPfVNrodMe6Tmqc=
-github.com/SchwarzIT/hypermatch v0.1.0/go.mod h1:H/WStKuHk4FprRLaR6nBC2PY1oKNqIsDysiKREZLLcY=
-github.com/google/go-cmp v0.5.9 h1:O2Tfq5qg4qc4AmwVlvv0oLiVAGB7enBSJ2x2DqQFi38=
-github.com/google/go-cmp v0.5.9/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
-gotest.tools/v3 v3.5.1 h1:EENdUnS3pdur5nybKYIh2Vfgc8IUNBjxDPSjtiJcOzU=
-gotest.tools/v3 v3.5.1/go.mod h1:isy3WKz7GK6uNw/sbHzfKBLvlvXwUyV06n6brMxxopU=
-quamina.net/go/quamina v1.3.0 h1:8CI8InbNYbswmnda70fU2YItHxEb4cmq0p0mttBKL2w=
-quamina.net/go/quamina v1.3.0/go.mod h1:EJ1teLWOcAHYfOUE+w2B6OQq5sAxEiwE0EDlcRxx+TQ=
+quamina.net/go/quamina v1.5.1 h1:hrJOsy6wGieU4Jae+Ei4U9Rwic579jEE5+OKkg7gs6E=
+quamina.net/go/quamina v1.5.1/go.mod h1:EJ1teLWOcAHYfOUE+w2B6OQq5sAxEiwE0EDlcRxx+TQ=

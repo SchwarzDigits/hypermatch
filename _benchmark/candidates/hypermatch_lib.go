@@ -2,16 +2,18 @@ package candidates
 
 import (
 	"fmt"
-	"github.com/SchwarzIT/hypermatch"
 	"log"
+
+	"github.com/SchwarzDigits/hypermatch"
 )
 
 type Hypermatch struct {
-	h *hypermatch.HyperMatch
+	h        *hypermatch.HyperMatch[int]
+	wildcard bool
 }
 
-func NewHypermatch() *Hypermatch {
-	return &Hypermatch{h: hypermatch.NewHyperMatch()}
+func NewHypermatch(wildcard bool) *Hypermatch {
+	return &Hypermatch{h: hypermatch.New[int](), wildcard: wildcard}
 }
 
 func (h *Hypermatch) Name() string {
@@ -19,8 +21,7 @@ func (h *Hypermatch) Name() string {
 }
 
 func (h *Hypermatch) AddRule(number int, modulo int) {
-	err := h.h.AddRule(hypermatch.RuleIdentifier(number), hypermatch.ConditionSet{
-		{Path: "name", Pattern: hypermatch.Pattern{Type: hypermatch.PatternWildcard, Value: "*-myapp-*"}},
+	rule := hypermatch.ConditionSet{
 		{Path: "env", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "prod"}},
 		{Path: "number", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: fmt.Sprintf("%d", number%modulo)}},
 		{Path: "tags", Pattern: hypermatch.Pattern{
@@ -40,8 +41,11 @@ func (h *Hypermatch) AddRule(number int, modulo int) {
 				{Type: hypermatch.PatternEquals, Value: "database"},
 			},
 		}},
-	})
-	if err != nil {
+	}
+	if h.wildcard {
+		rule = append(rule, hypermatch.Condition{Path: "name", Pattern: hypermatch.Pattern{Type: hypermatch.PatternWildcard, Value: "*-myapp-*"}})
+	}
+	if err := h.h.AddRule(number, rule); err != nil {
 		log.Panicln(err)
 	}
 }
