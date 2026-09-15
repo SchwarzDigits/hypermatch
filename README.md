@@ -20,7 +20,7 @@ hypermatch v2 has a brand-new matching engine:
 - ✨ **Modern API**: generic rule identifiers, validation errors that point to the problem, and results in insertion order.
 - 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly, 3 to 5 times as fast as decoding them first.
 - 🔄 **Live rule updates**: `RemoveRule` removes rules at run time without ever blocking `Match`.
-- 🔢 **Numbers and missing fields**: compare values numerically with `lt`, `lte`, `gt`, `gte` and `between`, and match present or absent fields with `exists`.
+- 🔢 **Numbers and missing fields**: compare values numerically with `lt`, `lte`, `gt`, `gte`, `eq` and `between`, and match present or absent fields with `exists`.
 - 🎯 **Routing**: `MatchFirst` finds the highest-priority rule and skips everything that cannot beat it, and `ReplaceRule` swaps rules atomically.
 - 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not.
 - 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 5. See the [comparison](#performance).
@@ -361,8 +361,8 @@ If the attribute value is type of:
 - **String**: Checks if the value matches all conditions, for example `{"allOf": [{"prefix": "web"}, {"suffix": "shop"}]}`
 - **String array**: Checks if the array contains both "shop" and "backend"
 
-### Numeric matching: "lt", "lte", "gt" and "gte"
-Numeric conditions compare a value as a number: `lt` (less than), `lte` (less than or equal), `gt` (greater than) and `gte` (greater than or equal).
+### Numeric matching: "lt", "lte", "gt", "gte" and "eq"
+Numeric conditions compare a value as a number: `lt` (less than), `lte` (less than or equal), `gt` (greater than), `gte` (greater than or equal) and `eq` (equal).
 
 ```javascript
 {
@@ -378,6 +378,8 @@ If the attribute value is type of:
 - **String array**: Checks if the array contains a number greater than 500
 
 Values are compared as decimal numbers such as `42`, `-1.5`, `.5` or `1e3`, so `"1e3"` and `"1000"` are equal. Values that are not numbers never match a numeric condition. You can write bounds as JSON numbers or as strings.
+
+`eq` is the numeric counterpart of `equals`: `{"eq": 500}` matches `500`, `500.0` and `5e2`, while `{"equals": "500"}` compares text and matches only `500`.
 
 ### "between" matching
 `between` checks if a value lies between a lower and an upper bound. Each bound is a numeric condition, which decides whether the bound itself is included.
@@ -467,7 +469,7 @@ matches, err := hm.MatchJSON([]byte(`{
 
 - **Nested objects**: Keys of nested objects are joined with `.`, so the value `shop` above is at the path `alert.labels.team`.
 - **Arrays**: Every element of an array is a value of the same path, so `tags` has the values `shop` and `backend`. The objects in an array contribute to the same paths as well.
-- **Numbers and literals**: Numbers match with their text as written in the JSON, so `500` matches `{"equals": "500"}`. Booleans match as `true` and `false`, and `null` counts as absent.
+- **Numbers and literals**: Numbers match with their text as written in the JSON, so `500` matches `{"equals": "500"}`, but not `{"equals": "500.0"}`. Numeric patterns such as `eq` and `gt` compare them as numbers. Booleans match as `true` and `false`, and `null` counts as absent.
 - **Errors**: Invalid JSON is rejected with an error wrapping `ErrInvalidEvent`.
 
 `AppendMatchesJSON` appends to a slice you provide, like `AppendMatches`.

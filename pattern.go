@@ -28,6 +28,7 @@ const (
 	PatternGreaterThanOrEqual // "gte": a value is a number greater than or equal to Value
 	PatternBetween            // "between": a single value satisfies the lower and the upper bound in Sub
 	PatternExists             // "exists": the property is present (Value "true") or absent (Value "false")
+	PatternNumericEquals      // "eq": a value is a number equal to Value, in any notation
 )
 
 // AllValues returns all valid pattern types.
@@ -35,7 +36,7 @@ func (p PatternType) AllValues() []PatternType {
 	return []PatternType{PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard,
 		PatternAnythingBut, PatternAnyOf, PatternAllOf,
 		PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual,
-		PatternBetween, PatternExists}
+		PatternBetween, PatternExists, PatternNumericEquals}
 }
 
 // HasLiteralValue reports whether patterns of type p use Value rather than
@@ -44,7 +45,7 @@ func (p PatternType) HasLiteralValue() bool {
 	switch p {
 	case PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard,
 		PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual,
-		PatternExists:
+		PatternExists, PatternNumericEquals:
 		return true
 	default:
 		return false
@@ -59,6 +60,11 @@ func (p PatternType) isComparison() bool {
 	default:
 		return false
 	}
+}
+
+// isNumeric reports whether p compares values with the number in Value.
+func (p PatternType) isNumeric() bool {
+	return p.isComparison() || p == PatternNumericEquals
 }
 
 func (p PatternType) String() string {
@@ -89,6 +95,8 @@ func (p PatternType) String() string {
 		return "between"
 	case PatternExists:
 		return "exists"
+	case PatternNumericEquals:
+		return "eq"
 	default:
 		return ""
 	}
@@ -124,6 +132,8 @@ func PatternTypeFromString(input string) PatternType {
 		return PatternBetween
 	case "exists":
 		return PatternExists
+	case "eq":
+		return PatternNumericEquals
 	}
 	return PatternUnknown
 }

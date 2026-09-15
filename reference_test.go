@@ -117,6 +117,8 @@ func refInRange(p Pattern, x float64) bool {
 		return x <= bound
 	case PatternGreaterThan:
 		return x > bound
+	case PatternNumericEquals:
+		return x == bound
 	}
 	return x >= bound
 }
@@ -143,7 +145,7 @@ func refSatisfies(p Pattern, values []string) bool {
 		return !refSatisfies(Pattern{Type: PatternAnyOf, Sub: p.Sub}, values)
 	case PatternExists:
 		return true // only "true" gets here, and the property is present
-	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternBetween:
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternBetween, PatternNumericEquals:
 		for _, v := range values {
 			if x, ok := refNumber(v); ok && refInRange(p, x) {
 				return true
@@ -283,7 +285,7 @@ func genPattern(src source, depth int) Pattern {
 	case 3:
 		return wildcardP(genWildcard(src))
 	case 4:
-		types := [...]PatternType{PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual}
+		types := [...]PatternType{PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternNumericEquals}
 		return Pattern{Type: types[src.intn(len(types))], Value: genBounds[src.intn(len(genBounds))]}
 	case 5:
 		return genBetween(src)

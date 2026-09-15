@@ -75,7 +75,7 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 }
 
 // Pattern defines how the values of a property are compared. The literal
-// types (equals, prefix, suffix, wildcard, lt, lte, gt, gte, exists) use
+// types (equals, prefix, suffix, wildcard, lt, lte, gt, gte, eq, exists) use
 // Value, the others (anythingBut, anyOf, allOf, between) use Sub.
 type Pattern struct {
 	Type  PatternType `json:"type"`
@@ -93,8 +93,8 @@ func (p Pattern) MarshalJSON() ([]byte, error) {
 	switch {
 	case p.Type == PatternExists && (p.Value == "true" || p.Value == "false"):
 		return json.Marshal(map[string]bool{name: p.Value == "true"})
-	case p.Type.isComparison() && p.Value != "":
-		// Bounds are written as JSON numbers where possible.
+	case p.Type.isNumeric() && p.Value != "":
+		// Numbers are written as JSON numbers where possible.
 		if data, err := json.Marshal(map[string]json.Number{name: json.Number(p.Value)}); err == nil {
 			return data, nil
 		}
@@ -110,7 +110,7 @@ func (p Pattern) MarshalJSON() ([]byte, error) {
 }
 
 // literalValue decodes the value of a pattern that uses Value. Numeric
-// comparisons also accept JSON numbers, and exists accepts booleans.
+// patterns also accept JSON numbers, and exists accepts booleans.
 func literalValue(t PatternType, raw json.RawMessage) (string, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -122,7 +122,7 @@ func literalValue(t PatternType, raw json.RawMessage) (string, error) {
 	case string:
 		return v, nil
 	case json.Number:
-		if t.isComparison() {
+		if t.isNumeric() {
 			return v.String(), nil
 		}
 	case bool:

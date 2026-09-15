@@ -10,7 +10,7 @@
 //     matches if any of its values does
 //   - anyOf, allOf and anythingBut combine patterns on the same path;
 //     anythingBut matches if none of the values matches any sub-pattern
-//   - lt, lte, gt, gte and between compare values as numbers
+//   - lt, lte, gt, gte, eq and between compare values as numbers
 //   - exists tests whether the property is present or absent
 //
 // Except for {"exists": false}, a condition never matches a property that

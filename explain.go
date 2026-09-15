@@ -129,7 +129,7 @@ func valueMatches(p Pattern, v string) bool {
 		return strings.HasSuffix(v, fold(p.Value))
 	case PatternWildcard:
 		return globMatch(fold(p.Value), v)
-	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual:
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternNumericEquals:
 		x, ok := parseNumber(v)
 		bound, _ := parseNumber(p.Value)
 		return ok && boundInterval(p.Type, bound).contains(x)

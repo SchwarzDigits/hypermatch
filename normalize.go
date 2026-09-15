@@ -124,7 +124,7 @@ func normalizePattern(p *Pattern) (*expr, error) {
 			return nil, fmt.Errorf("[%s] must not contain two consecutive wildcards", p.Type)
 		}
 		return wildcardLeaf(v), nil
-	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual:
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternNumericEquals:
 		v, err := numericBound(p)
 		if err != nil {
 			return nil, err
@@ -197,6 +197,8 @@ func boundInterval(t PatternType, v float64) numInterval {
 		return numInterval{lo: math.Inf(-1), hi: v}
 	case PatternGreaterThan:
 		return numInterval{lo: v, hi: math.Inf(1), loOpen: true}
+	case PatternNumericEquals:
+		return numInterval{lo: v, hi: v}
 	}
 	return numInterval{lo: v, hi: math.Inf(1)}
 }
