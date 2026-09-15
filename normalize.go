@@ -200,6 +200,55 @@ func negate(e *expr) *expr {
 	return &expr{op: opNot, subs: []*expr{e}, key: "!(" + e.key + ")"}
 }
 
+// parseKey returns the expression whose key is key. It inverts newLeaf,
+// combine and negate, which lets RemoveRule rebuild the compiled rules from
+// the keys stored in them.
+func parseKey(key string) *expr {
+	e, rest := parseExpr(key)
+	if rest != "" {
+		panic("hypermatch: invalid expression key " + strconv.Quote(key))
+	}
+	return e
+}
+
+// parseExpr parses the expression at the start of s and returns it together
+// with the rest of s.
+func parseExpr(s string) (*expr, string) {
+	for kind, tag := range leafTags {
+		if s[0] == tag {
+			colon := strings.IndexByte(s, ':')
+			n, err := strconv.Atoi(s[1:colon])
+			if err != nil {
+				panic("hypermatch: invalid expression key " + strconv.Quote(s))
+			}
+			end := colon + 1 + n
+			return newLeaf(leafKind(kind), s[colon+1:end]), s[end:]
+		}
+	}
+	var op exprOp
+	switch s[0] {
+	case opTags[opAnyOf]:
+		op = opAnyOf
+	case opTags[opAllOf]:
+		op = opAllOf
+	case opTags[opNot]:
+		op = opNot
+	default:
+		panic("hypermatch: invalid expression key " + strconv.Quote(s))
+	}
+	s = s[2:] // the tag and '('
+	var subs []*expr
+	for s[0] != ')' {
+		var e *expr
+		e, s = parseExpr(s)
+		subs = append(subs, e)
+	}
+	if op == opNot {
+		return negate(subs[0]), s[1:]
+	}
+	return combine(op, subs), s[1:]
+}
+
 // monotone reports whether e contains no negation. A monotone expression
 // can only hold if at least one of its leaves matches.
 func (e *expr) monotone() bool {

@@ -26,7 +26,7 @@ Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
 Hypermatch is a high-performance Go library that matches events against large sets of rules. Rules are compiled into a shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
 - **Fast**: Matches an event against 100,000 rules in about half a microsecond on a single core, and 14 million events per second on 14 cores. [Benchmarks](#performance)
-- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added.
+- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added or removed.
 - **Correct**: The matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
 - **Readable Rule Format**: Write rules in Go or as human-readable JSON objects.
 - **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, anything-but, all-of and any-of conditions, which can be nested freely.
@@ -336,6 +336,7 @@ If the attribute value is type of:
 
 - `Match` returns the identifiers of all matching rules in the order in which they were first added, each at most once, or `nil` if no rule matches.
 - Adding several condition sets under the same identifier combines them with a boolean "or": the identifier matches if any of its condition sets matches.
+- `RemoveRule` removes all condition sets of an identifier at run time. Adding the identifier again later counts as adding a new rule.
 - `RuleCount` returns the number of distinct identifiers.
 
 ## Validation
@@ -353,8 +354,9 @@ if errors.Is(err, hypermatch.ErrInvalidRule) {
 
 All methods of `HyperMatch` are safe for concurrent use:
 
-- `Match` never blocks. It runs lock-free and scales with the number of cores, even while other goroutines add rules.
-- `AddRule` calls are serialized. A rule is visible to every `Match` call that starts after its `AddRule` call returned.
+- `Match` never blocks. It runs lock-free and scales with the number of cores, even while other goroutines add or remove rules.
+- `AddRule` and `RemoveRule` calls are serialized. Their effect is visible to every `Match` call that starts after they returned.
+- Once a quarter of the compiled rules have been removed, `RemoveRule` compacts them, which takes about as long as adding the remaining rules again. `Match` keeps running meanwhile.
 
 The zero value of `HyperMatch` is ready to use.
 

@@ -202,6 +202,36 @@ func (t *trie) follow(s *state, c condition) *state {
 	return e.next
 }
 
+// noRule marks the numbers of the rules copyRules drops.
+const noRule = ^uint32(0)
+
+// copyRules adds the rules of src to t, renumbering rule n to renum[n] and
+// dropping the rules renumbered to noRule. Conditions no remaining rule uses
+// are not copied. The conditions are recovered from their keys, so the
+// original condition sets need not be kept. Writer only.
+func (t *trie) copyRules(src *trie, renum []uint32) {
+	t.copyState(&src.root, nil, renum)
+}
+
+func (t *trie) copyState(s *state, prefix []condition, renum []uint32) {
+	var dst *state
+	for _, n := range s.appendRules(nil) {
+		if m := renum[n]; m != noRule {
+			if dst == nil {
+				dst = t.insert(prefix)
+			}
+			dst.addRule(m)
+		}
+	}
+	for _, g := range s.glist.load() {
+		for key, k := range g.byKey {
+			if k.edge != nil {
+				t.copyState(k.edge.next, append(prefix, condition{path: g.path, expr: parseKey(key)}), renum)
+			}
+		}
+	}
+}
+
 func (g *group) compile(e *expr) formula {
 	if e.op == opLeaf {
 		return formula{op: opLeaf, leaf: g.leaf(e).id}

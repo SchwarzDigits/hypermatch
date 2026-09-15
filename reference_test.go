@@ -12,7 +12,8 @@ import (
 // matching semantics. It is the oracle for the differential tests.
 type refMatcher struct {
 	rules []refRule
-	first map[int]int // position of the first rule of each identifier
+	order map[int]int // position of each present identifier, by addition
+	seq   int
 }
 
 type refRule struct {
@@ -21,13 +22,23 @@ type refRule struct {
 }
 
 func (r *refMatcher) add(id int, cs ConditionSet) {
-	if r.first == nil {
-		r.first = make(map[int]int)
+	if r.order == nil {
+		r.order = make(map[int]int)
 	}
-	if _, ok := r.first[id]; !ok {
-		r.first[id] = len(r.first)
+	if _, ok := r.order[id]; !ok {
+		r.order[id] = r.seq
+		r.seq++
 	}
 	r.rules = append(r.rules, refRule{id, cs})
+}
+
+func (r *refMatcher) remove(id int) bool {
+	if _, ok := r.order[id]; !ok {
+		return false
+	}
+	delete(r.order, id)
+	r.rules = slices.DeleteFunc(r.rules, func(rule refRule) bool { return rule.id == id })
+	return true
 }
 
 func (r *refMatcher) match(event []Property) []int {
@@ -37,7 +48,7 @@ func (r *refMatcher) match(event []Property) []int {
 			out = append(out, rule.id)
 		}
 	}
-	slices.SortFunc(out, func(a, b int) int { return cmp.Compare(r.first[a], r.first[b]) })
+	slices.SortFunc(out, func(a, b int) int { return cmp.Compare(r.order[a], r.order[b]) })
 	return out
 }
 

@@ -51,6 +51,45 @@ func (l *list[T]) add(v T) {
 	l.n.Store(int32(n + 1))
 }
 
+// bitset is a set of numbers that only grows.
+type bitset struct {
+	p atomic.Pointer[[]uint64]
+}
+
+// load returns the words of the set, or nil if it is empty. Words must be
+// read with bitsHas.
+func (b *bitset) load() []uint64 {
+	if p := b.p.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+func (b *bitset) has(i uint32) bool {
+	return bitsHas(b.load(), i)
+}
+
+// bitsHas reports whether the words returned by bitset.load contain i.
+func bitsHas(words []uint64, i uint32) bool {
+	w := int(i >> 6)
+	return w < len(words) && atomic.LoadUint64(&words[w])&(1<<(i&63)) != 0
+}
+
+// set adds i. Writer only.
+func (b *bitset) set(i uint32) {
+	words := b.load()
+	w := int(i >> 6)
+	if w >= len(words) {
+		grown := make([]uint64, max(2*len(words), w+1))
+		for j := range words {
+			grown[j] = atomic.LoadUint64(&words[j])
+		}
+		b.p.Store(&grown)
+		words = grown
+	}
+	atomic.OrUint64(&words[w], 1<<(i&63))
+}
+
 // hashSeed is shared by all hash tables, so a hash computed once can be
 // used for lookups in several tables.
 var hashSeed = maphash.MakeSeed()

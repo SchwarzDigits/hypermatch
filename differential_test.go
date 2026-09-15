@@ -8,14 +8,15 @@ import (
 	"testing"
 )
 
-// diffAgainstReference adds random rules to a HyperMatch and to a
+// diffAgainstReference adds and removes random rules in a HyperMatch and in a
 // refMatcher, interleaved with random events, and returns an error as soon as
 // their results differ.
 func diffAgainstReference(src source, ops int) error {
 	h := New[int]()
 	ref := &refMatcher{}
 	for i := range ops {
-		if src.intn(3) == 0 {
+		switch op := src.intn(6); {
+		case op < 2:
 			event := genEvent(src)
 			if got, want := h.Match(event), ref.match(event); !slices.Equal(got, want) {
 				var rules strings.Builder
@@ -23,6 +24,15 @@ func diffAgainstReference(src source, ops int) error {
 					fmt.Fprintf(&rules, "  %d: %s\n", r.id, fmtRule(r.cs))
 				}
 				return fmt.Errorf("event %s:\n got %v\nwant %v\nrules:\n%s", fmtEvent(event), got, want, rules.String())
+			}
+			if got, want := h.RuleCount(), len(ref.order); got != want {
+				return fmt.Errorf("RuleCount = %d, want %d", got, want)
+			}
+			continue
+		case op == 2 && i > 0:
+			id := src.intn(i)
+			if got, want := h.RemoveRule(id), ref.remove(id); got != want {
+				return fmt.Errorf("RemoveRule(%d) = %v, want %v", id, got, want)
 			}
 			continue
 		}

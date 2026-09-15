@@ -239,6 +239,50 @@ func heapAlloc() uint64 {
 	return m.HeapAlloc
 }
 
+// BenchmarkMatchWithRemovedRules measures the mixed workload after removing
+// every fifth of 100,000 rules, which is not enough to compact the matcher.
+func BenchmarkMatchWithRemovedRules(b *testing.B) {
+	const n = 100_000
+	w := benchWorkloads[0]
+	h := newBenchMatcher(b, w, n)
+	for i := 0; i < n; i += 5 {
+		h.RemoveRule(i)
+	}
+	events := benchEvents(w, n)
+	runtime.GC()
+	b.ReportAllocs()
+	var matches, i int
+	for b.Loop() {
+		matches += len(h.Match(events[i%len(events)]))
+		i++
+	}
+	benchSink.Add(int64(matches))
+}
+
+// BenchmarkRemoveRule measures removing all of 10,000 rules per op,
+// including the compactions this triggers.
+func BenchmarkRemoveRule(b *testing.B) {
+	const n = 10_000
+	rules := make([]ConditionSet, n)
+	for i := range rules {
+		rules[i] = mixedRule(i, n)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		h := New[int]()
+		for i, r := range rules {
+			if err := h.AddRule(i, r); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		for i := range n {
+			h.RemoveRule(i)
+		}
+	}
+}
+
 // BenchmarkAddRule measures building a matcher with 10,000 rules per op.
 func BenchmarkAddRule(b *testing.B) {
 	const n = 10_000
