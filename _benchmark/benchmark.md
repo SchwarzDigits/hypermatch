@@ -1,32 +1,42 @@
-# Benchmarks
+# Comparison Benchmark
 
-To run the benchmark suite, navigate to the same folder and execute the main.go file.
-This suite will test the performance of hypermatch with plain Go objects, hypermatch with JSON objects, and [quamina](https://github.com/timbray/quamina) against each other.
-Simply run the command go run main.go to start the benchmarks and compare the results.
+This suite compares hypermatch with [quamina](https://github.com/timbray/quamina), another Go library that matches events against rules. Run it with `go run .` in this folder. It always benchmarks the hypermatch code of this repository.
 
-Results as of Aug, 29th, 2024 with Go 1.23.0 on MacBook Pro M1 Max, 32GB RAM with 100,000 rules:
+Every candidate gets 100,000 rules like the following one. Ten rules share each `number`, so every event matches ten rules.
 
+```javascript
+{
+    "name":   {"wildcard": "*-myapp-*"},
+    "env":    {"equals": "prod"},
+    "number": {"equals": "4711"},
+    "tags":   {"allOf": [{"equals": "tag1"}, {"equals": "tag2"}]},
+    "region": {"anythingBut": [{"equals": "moon"}]},
+    "type":   {"anyOf": [{"equals": "app"}, {"equals": "database"}]}
+}
 ```
----Starting with hypermatch
-adding 100000 rules took 0.51862s
-processed 51753 events with 517530 matches in 1.00001s -> 51752.42425 evt/s
-processed 103199 events with 1031990 matches in 2.00004s -> 51598.36053 evt/s
-processed 156249 events with 1562490 matches in 3.00009s -> 52081.45563 evt/s
-processed 209523 events with 2095230 matches in 4.00013s -> 52379.05586 evt/s
-processed 262257 events with 2622570 matches in 5.00016s -> 52449.76793 evt/s
 
----Starting with hypermatch-json
-adding 100000 rules took 1.95150s
-processed 39732 events with 397320 matches in 1.00000s -> 39731.90564 evt/s
-processed 80432 events with 804320 matches in 2.00003s -> 40215.31718 evt/s
-processed 121915 events with 1219150 matches in 3.00006s -> 40637.55840 evt/s
-processed 164093 events with 1640930 matches in 4.00009s -> 41022.33768 evt/s
-processed 206235 events with 2062350 matches in 5.00013s -> 41245.96473 evt/s
+The suite then matches events on a single goroutine for five seconds. The candidates are:
 
----Starting with quamina
-adding 100000 rules took 4.54697s
-processed 4 events with 0 matches in 1.24154s -> 3.22181 evt/s
-processed 7 events with 0 matches in 2.31263s -> 3.02685 evt/s
-processed 11 events with 0 matches in 3.50818s -> 3.13552 evt/s
-processed 15 events with 0 matches in 4.70148s -> 3.19049 evt/s
-```
+- **hypermatch**: rules and events are Go values.
+- **hypermatch-json**: every rule and every event is decoded from JSON first, which shows the cost of JSON decoding.
+- **quamina**: rules are quamina patterns, events are JSON. Quamina has no `allOf`, so its `tags` condition matches if an event contains either tag.
+
+Quamina slows down considerably with many shellstyle (wildcard) patterns, so the suite measures every candidate with and without the `name` condition. Every measurement runs in its own process.
+
+Results as of September 15th, 2026, on an Apple M4 Max with 36 GB RAM, Go 1.26.5 and quamina 1.5.1:
+
+| Rules | Candidate | Adding 100,000 rules | Events per second | Matches per event |
+|---|---|---:|---:|---:|
+| with wildcard | hypermatch | 0.16 s | 1,485,332 | 10 |
+| with wildcard | hypermatch-json | 1.34 s | 273,377 | 10 |
+| with wildcard | quamina | 3.12 s | 4 | 10 |
+| without wildcard | hypermatch | 0.13 s | 1,855,493 | 10 |
+| without wildcard | hypermatch-json | 1.23 s | 285,437 | 10 |
+| without wildcard | quamina | 2.63 s | 31,804 | 10 |
+
+- With a wildcard condition in every rule, hypermatch matches about 1.5 million events per second, and quamina 4.
+- Without the wildcard condition, hypermatch is about 58 times as fast as quamina.
+- hypermatch adds rules about 20 times as fast as quamina.
+- Decoding every rule and event from JSON costs more than matching: hypermatch-json processes about 280,000 events per second.
+
+The throughput includes building every event with `fmt.Sprintf`. The [README](../README.md#performance) has in-package benchmarks of hypermatch alone, including parallel matching.

@@ -2,118 +2,129 @@ package hypermatch
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
 )
 
-// ConditionSet represents a rule and consists of one or more items of type Condition
+// ConditionSet is a rule. An event matches it if it matches every Condition.
 type ConditionSet []Condition
 
-// MarshalJSON marshals a ConditionSet into an easy readable JSON object
+// MarshalJSON encodes the set as an object keyed by path, for example
+// {"status": {"equals": "firing"}}. Several conditions on the same path are
+// combined into an equivalent allOf pattern.
 func (c ConditionSet) MarshalJSON() ([]byte, error) {
-	// CAUTION: this must not be a pointer-receiver!
-	data := make(map[string]Pattern, len(c))
+	byPath := make(map[string][]Pattern, len(c))
 	for _, cc := range c {
-		data[cc.Path] = cc.Pattern
+		byPath[cc.Path] = append(byPath[cc.Path], cc.Pattern)
 	}
-
+	data := make(map[string]Pattern, len(byPath))
+	for path, ps := range byPath {
+		if len(ps) == 1 {
+			data[path] = ps[0]
+		} else {
+			data[path] = Pattern{Type: PatternAllOf, Sub: ps}
+		}
+	}
 	return json.Marshal(data)
 }
 
-// UnmarshalJSON unmarshal the JSON back to a ConditionSet
+// UnmarshalJSON decodes the object form written by MarshalJSON. The
+// conditions are sorted by path.
 func (c *ConditionSet) UnmarshalJSON(data []byte) error {
-	// CAUTION: this must be a pointer-receiver!
 	var r map[string]Pattern
 	if err := json.Unmarshal(data, &r); err != nil {
 		return err
 	}
-
-	var cs ConditionSet
-	for k, v := range r {
-		cs = append(cs, Condition{
-			Path:    k,
-			Pattern: v,
-		})
+	cs := make(ConditionSet, 0, len(r))
+	for path, p := range r {
+		cs = append(cs, Condition{Path: path, Pattern: p})
 	}
+	slices.SortFunc(cs, func(a, b Condition) int { return strings.Compare(a.Path, b.Path) })
 	*c = cs
 	return nil
 }
 
-// Condition represents a single condition inside a ConditionSet. It defines a Path (=reference to property in an event) and a Pattern to check against the value.
+// Condition is a single condition of a ConditionSet: the values of the
+// property at Path must match Pattern. Paths are case-sensitive.
 type Condition struct {
 	Path    string  `json:"path"`
 	Pattern Pattern `json:"pattern"`
 }
 
-// MarshalJSON marshals a Condition into an easy readable JSON object
+// MarshalJSON encodes the condition as {"<path>": <pattern>}.
 func (c Condition) MarshalJSON() ([]byte, error) {
-	// CAUTION: this must not be a pointer-receiver!
-	return json.Marshal(map[string]Pattern{
-		c.Path: c.Pattern,
-	})
+	return json.Marshal(map[string]Pattern{c.Path: c.Pattern})
 }
 
-// UnmarshalJSON unmarshal the JSON back to a Condition
+// UnmarshalJSON decodes the object form written by MarshalJSON.
 func (c *Condition) UnmarshalJSON(data []byte) error {
-	// CAUTION: this must be a pointer-receiver!
 	var r map[string]Pattern
 	if err := json.Unmarshal(data, &r); err != nil {
 		return err
 	}
-	for k, v := range r {
-		c.Path = k
-		c.Pattern = v
-		break
+	if len(r) != 1 {
+		return fmt.Errorf("hypermatch: condition must have exactly one path, got %d", len(r))
+	}
+	for path, p := range r {
+		*c = Condition{Path: path, Pattern: p}
 	}
 	return nil
 }
 
-// Pattern defines how a value should be compared. It consists of a Type and either a Value or Sub-patterns depending on the used Type.
+// Pattern defines how the values of a property are compared. The literal
+// types (equals, prefix, suffix, wildcard) use Value, the compound types
+// (anythingBut, anyOf, allOf) use Sub.
 type Pattern struct {
 	Type  PatternType `json:"type"`
 	Value string      `json:"value,omitempty"`
 	Sub   []Pattern   `json:"sub,omitempty"`
 }
 
-// MarshalJSON marshals a Pattern into an easy readable JSON object
+// MarshalJSON encodes the pattern as {"<type>": "<value>"} or
+// {"<type>": [<sub-patterns>]}.
 func (p Pattern) MarshalJSON() ([]byte, error) {
-	// CAUTION: this must not be a pointer-receiver!
-
-	if len(p.Sub) > 0 {
-		return json.Marshal(map[string][]Pattern{
-			p.Type.String(): p.Sub,
-		})
-	} else {
-		return json.Marshal(map[string]string{
-			p.Type.String(): p.Value,
-		})
+	name := p.Type.String()
+	if name == "" {
+		return nil, fmt.Errorf("hypermatch: unknown pattern type %d", p.Type)
 	}
+	if p.Type.HasLiteralValue() {
+		return json.Marshal(map[string]string{name: p.Value})
+	}
+	sub := p.Sub
+	if sub == nil {
+		sub = []Pattern{}
+	}
+	return json.Marshal(map[string][]Pattern{name: sub})
 }
 
-// UnmarshalJSON unmarshal the JSON back to a Pattern
+// UnmarshalJSON decodes the object form written by MarshalJSON.
 func (p *Pattern) UnmarshalJSON(data []byte) error {
-	// CAUTION: this must be a pointer-receiver!
-
 	var r map[string]json.RawMessage
 	if err := json.Unmarshal(data, &r); err != nil {
 		return err
 	}
-
-	for k, v := range r {
-		p.Type = PatternTypeFromString(k)
-		switch p.Type {
-		case PatternAnythingBut, PatternAnyOf, PatternAllOf:
-			var ps []Pattern
-			if err := json.Unmarshal(v, &ps); err != nil {
-				return err
+	if len(r) != 1 {
+		return fmt.Errorf("hypermatch: pattern must have exactly one type, got %d", len(r))
+	}
+	for name, raw := range r {
+		t := PatternTypeFromString(name)
+		switch {
+		case t == PatternUnknown:
+			return fmt.Errorf("hypermatch: unknown pattern type %q", name)
+		case t.HasLiteralValue():
+			var v string
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return fmt.Errorf("hypermatch: pattern %q: %w", name, err)
 			}
-			p.Sub = ps
+			*p = Pattern{Type: t, Value: v}
 		default:
-			var d string
-			if err := json.Unmarshal(v, &d); err != nil {
-				return err
+			var sub []Pattern
+			if err := json.Unmarshal(raw, &sub); err != nil {
+				return fmt.Errorf("hypermatch: pattern %q: %w", name, err)
 			}
-			p.Value = d
+			*p = Pattern{Type: t, Sub: sub}
 		}
-		break
 	}
 	return nil
 }

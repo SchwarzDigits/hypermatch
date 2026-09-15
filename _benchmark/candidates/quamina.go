@@ -3,19 +3,21 @@ package candidates
 import (
 	"fmt"
 	"log"
+
 	"quamina.net/go/quamina"
 )
 
 type Quamina struct {
-	q *quamina.Quamina
+	q        *quamina.Quamina
+	wildcard bool
 }
 
-func NewQuamina() *Quamina {
+func NewQuamina(wildcard bool) *Quamina {
 	q, err := quamina.New(quamina.WithMediaType("application/json"))
 	if err != nil {
 		panic(err)
 	}
-	return &Quamina{q: q}
+	return &Quamina{q: q, wildcard: wildcard}
 }
 
 func (q *Quamina) Name() string {
@@ -23,16 +25,21 @@ func (q *Quamina) Name() string {
 }
 
 func (q *Quamina) AddRule(number int, modulo int) {
+	name := ""
+	if q.wildcard {
+		name = `"name": [{"shellstyle": "*-myapp-*"}],`
+	}
+	// Quamina has no allOf: "tags" matches if the event contains tag1 or tag2.
 	str := fmt.Sprintf(`
 		{
-			"name": [{"shellstyle": "*-myapp-*"}],
+			%s
 			"env": ["prod"],
-			"nunmber": ["%d"],
+			"number": ["%d"],
 			"tags": ["tag1", "tag2"],
 			"region": [{"anything-but": ["moon"]}],
 			"type": ["app", "database"]
 		}
-	`, number%modulo)
+	`, name, number%modulo)
 	err := q.q.AddPattern(number, str)
 	if err != nil {
 		log.Panicln(err)

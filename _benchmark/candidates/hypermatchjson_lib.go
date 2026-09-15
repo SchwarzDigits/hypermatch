@@ -3,15 +3,17 @@ package candidates
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/SchwarzIT/hypermatch"
+
+	"github.com/SchwarzDigits/hypermatch/v2"
 )
 
 type HypermatchJson struct {
-	h *hypermatch.HyperMatch
+	h        *hypermatch.HyperMatch[int]
+	wildcard bool
 }
 
-func NewHypermatchJson() *HypermatchJson {
-	return &HypermatchJson{h: hypermatch.NewHyperMatch()}
+func NewHypermatchJson(wildcard bool) *HypermatchJson {
+	return &HypermatchJson{h: hypermatch.New[int](), wildcard: wildcard}
 }
 
 func (h *HypermatchJson) Name() string {
@@ -19,21 +21,25 @@ func (h *HypermatchJson) Name() string {
 }
 
 func (h *HypermatchJson) AddRule(number int, modulo int) {
+	name := ""
+	if h.wildcard {
+		name = `"name": {"wildcard": "*-myapp-*"},`
+	}
 	jsonStr := fmt.Sprintf(`
 		{
-			"name": {"wildcard": "*-myapp-*"},
+			%s
 			"env": {"equals": "prod"},
 			"number": {"equals": "%d"},
 			"tags": {"allOf": [{"equals": "tag1"}, {"equals": "tag2"}]},
 			"region": {"anythingBut": [{"equals": "moon"}]},
 			"type": {"anyOf": [{"equals": "app"}, {"equals": "database"}]}
 		}
-	`, number%modulo)
+	`, name, number%modulo)
 	var conditionSet hypermatch.ConditionSet
 	if err := json.Unmarshal([]byte(jsonStr), &conditionSet); err != nil {
 		panic(err)
 	}
-	if err := h.h.AddRule(hypermatch.RuleIdentifier(number), conditionSet); err != nil {
+	if err := h.h.AddRule(number, conditionSet); err != nil {
 		panic(err)
 	}
 }
