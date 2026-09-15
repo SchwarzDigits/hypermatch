@@ -15,10 +15,11 @@ import (
 // once.
 
 type trie struct {
-	root     state
-	paths    strMap[string]   // the path of every condition, for MatchJSON
-	prefixes strMap[struct{}] // the parts of these paths before each "."
-	edgeSeq  uint64           // writer only
+	root      state
+	paths     strMap[string]   // the path of every condition, for MatchJSON
+	prefixes  strMap[struct{}] // the parts of these paths before each "."
+	hasAbsent atomic.Bool      // some condition is {"exists": false}
+	edgeSeq   uint64           // writer only
 }
 
 // addPath records path and its prefixes for MatchJSON. Writer only.
@@ -37,10 +38,19 @@ func (t *trie) addPath(path string) {
 }
 
 type state struct {
-	groups strMap[*group] // outgoing conditions, by path
-	glist  list[*group]   // the same groups, for iteration
-	rule   atomic.Uint32  // 1 + number of the first rule ending here, or 0
-	rules  list[uint32]   // numbers of further rules ending here
+	groups strMap[*group]                // outgoing conditions, by path
+	glist  list[*group]                  // the same groups, for iteration
+	absent atomic.Pointer[[]*absentEdge] // conditions that hold if their path is absent; copied on write
+	rule   atomic.Uint32                 // 1 + number of the first rule ending here, or 0
+	rules  list[uint32]                  // numbers of further rules ending here
+}
+
+// absentEdge is a condition {"exists": false}, which holds if the event has
+// no value at path.
+type absentEdge struct {
+	path string
+	hash uint64
+	next *state
 }
 
 // addRule records that rule num ends in s. Writer only.
@@ -187,6 +197,9 @@ func (t *trie) insert(conds []condition) *state {
 }
 
 func (t *trie) follow(s *state, c condition) *state {
+	if c.expr.op == opAbsent {
+		return t.followAbsent(s, c.path)
+	}
 	g, ok := s.groups.get(c.path)
 	if !ok {
 		g = &group{
@@ -220,6 +233,26 @@ func (t *trie) follow(s *state, c condition) *state {
 	return e.next
 }
 
+// followAbsent returns the state the condition {"exists": false} on path
+// leads to from s, adding it if necessary.
+func (t *trie) followAbsent(s *state, path string) *state {
+	var cur []*absentEdge
+	if p := s.absent.Load(); p != nil {
+		cur = *p
+	}
+	for _, a := range cur {
+		if a.path == path {
+			return a.next
+		}
+	}
+	a := &absentEdge{path: path, hash: maphash.String(hashSeed, path), next: new(state)}
+	next := append(slices.Clip(cur), a)
+	t.hasAbsent.Store(true) // before the edge, so that no Match can miss it
+	s.absent.Store(&next)
+	t.addPath(path) // MatchJSON must see whether the path is present
+	return a.next
+}
+
 // noRule marks the numbers of the rules copyRules drops.
 const noRule = ^uint32(0)
 
@@ -239,6 +272,11 @@ func (t *trie) copyState(s *state, prefix []condition, renum []uint32) {
 				dst = t.insert(prefix)
 			}
 			dst.addRule(m)
+		}
+	}
+	if p := s.absent.Load(); p != nil {
+		for _, a := range *p {
+			t.copyState(a.next, append(prefix, condition{path: a.path, expr: absentExpr}), renum)
 		}
 	}
 	for _, g := range s.glist.load() {
@@ -286,6 +324,7 @@ type scratch struct {
 	out      []uint32
 	globCur  []*globNode
 	globNext []*globNode
+	absent   bool // the rules contain {"exists": false} conditions
 
 	// MatchJSON only.
 	jvals []jval // values found, before they are grouped into spans
@@ -310,11 +349,23 @@ type span struct {
 }
 
 // vref is the position of a folded value in fbuf, together with its hash
-// once computed.
+// and its numeric value once computed.
 type vref struct {
 	lo, hi int
 	hash   uint64
 	hashed bool
+	num    float64
+	parsed bool // num and isNum are set
+	isNum  bool
+}
+
+// number returns the value v, located at r, as a number.
+func (r *vref) number(v []byte) (float64, bool) {
+	if !r.parsed {
+		r.num, r.isNum = parseNumber(v)
+		r.parsed = true
+	}
+	return r.num, r.isNum
 }
 
 var scratchPool = sync.Pool{New: func() any { return new(scratch) }}
@@ -392,6 +443,15 @@ func (sc *scratch) find(path string, h uint64) *span {
 // visit collects the rules of s and follows every condition that holds.
 func (sc *scratch) visit(s *state) {
 	sc.out = s.appendRules(sc.out)
+	if sc.absent {
+		if p := s.absent.Load(); p != nil {
+			for _, a := range *p {
+				if sc.find(a.path, a.hash) == nil {
+					sc.visit(a.next)
+				}
+			}
+		}
+	}
 	groups := s.glist.load()
 	if len(groups) <= len(sc.spans) {
 		for _, g := range groups {
@@ -433,13 +493,16 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 		sp.folded = true
 	}
 
+	kinds := g.index.kinds.Load() // after neg, for the same reason
 	hits := sc.hits[:0]
 	for i := sp.flo; i < sp.fhi; i++ {
 		r := &sc.frefs[i]
-		hits = g.index.collect(sc.fbuf[r.lo:r.hi], r, hits, sc)
+		hits = g.index.collect(sc.fbuf[r.lo:r.hi], r, hits, sc, kinds)
 	}
-	if l := g.index.exists.Load(); l != nil {
-		hits = append(hits, l)
+	if kinds&(1<<leafExists) != 0 {
+		if l := g.index.exists.Load(); l != nil {
+			hits = append(hits, l)
+		}
 	}
 	if len(hits) > 1 {
 		slices.SortFunc(hits, func(a, b *leaf) int { return cmp.Compare(a.id, b.id) })

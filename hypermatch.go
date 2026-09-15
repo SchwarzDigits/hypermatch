@@ -183,9 +183,8 @@ func (h *HyperMatch[T]) AppendMatches(dst []T, event []Property) []T {
 	}
 	sc := scratchPool.Get().(*scratch)
 	sc.reset(event)
-	if len(sc.spans) > 0 {
-		sc.visit(&tab.root)
-	}
+	sc.absent = tab.hasAbsent.Load()
+	sc.visit(&tab.root) // even without properties: conditions may require absent ones
 	dst = tab.results(dst, sc)
 	sc.release()
 	return dst

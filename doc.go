@@ -10,8 +10,11 @@
 //     matches if any of its values does
 //   - anyOf, allOf and anythingBut combine patterns on the same path;
 //     anythingBut matches if none of the values matches any sub-pattern
+//   - lt, lte, gt, gte and between compare values as numbers
+//   - exists tests whether the property is present or absent
 //
-// A condition never matches a property that is absent from the event.
+// Except for {"exists": false}, a condition never matches a property that
+// is absent from the event.
 //
 // Rules are compiled into a trie of shared conditions backed by hash and
 // automaton indexes, so the cost of matching an event depends on the event

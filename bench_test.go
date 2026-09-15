@@ -135,6 +135,23 @@ var benchWorkloads = []benchWorkload{
 		},
 		wantMatches: 99,
 	},
+	{
+		// Numeric thresholds: ten rules per service with increasing bounds.
+		name: "numeric",
+		rule: func(i, n int) ConditionSet {
+			return ConditionSet{
+				{Path: "service", Pattern: equalsP("svc-" + strconv.Itoa(i/10))},
+				{Path: "latency", Pattern: Pattern{Type: PatternGreaterThan, Value: strconv.Itoa(i % 10 * 100)}},
+			}
+		},
+		event: func(i, n int) []Property {
+			return []Property{
+				{Path: "service", Values: []string{"svc-" + strconv.Itoa((i%n)/10)}},
+				{Path: "latency", Values: []string{"550"}},
+			}
+		},
+		wantMatches: 6,
+	},
 }
 
 func newBenchMatcher(tb testing.TB, w benchWorkload, n int) *HyperMatch[int] {

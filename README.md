@@ -20,6 +20,7 @@ hypermatch v2 has a brand-new matching engine:
 - ✨ **Modern API**: generic rule identifiers, validation errors that point to the problem, and results in insertion order.
 - 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly, 3 to 5 times as fast as decoding them first.
 - 🔄 **Live rule updates**: `RemoveRule` removes rules at run time without ever blocking `Match`.
+- 🔢 **Numbers and missing fields**: compare values numerically with `lt`, `lte`, `gt`, `gte` and `between`, and match present or absent fields with `exists`.
 - 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 5. See the [comparison](#performance).
 
 Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
@@ -31,7 +32,7 @@ Hypermatch is a high-performance Go library that matches events against large se
 - **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added or removed.
 - **Correct**: The matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
 - **Readable Rule Format**: Write rules in Go or as human-readable JSON objects.
-- **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, anything-but, all-of and any-of conditions, which can be nested freely.
+- **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, numeric comparisons, exists, anything-but, all-of and any-of conditions, which can be nested freely.
 - **No Dependencies**: Only the Go standard library.
 
 An event consists of a list of fields, provided as name/value pairs. A rule links these event fields to patterns that determine whether the event matches.
@@ -142,7 +143,7 @@ The following rules apply to all conditions:
 - **Case-Insensitive Values**: All value comparisons are case-insensitive, including non-ASCII letters (`"ÄRGER"` equals `"ärger"`).
 - **Case-Sensitive Paths**: `"Name"` and `"name"` are different paths, just like keys in JSON.
 - **Supported Types**: Values are strings or string arrays.
-- **Missing Properties**: A condition never matches a property that is absent from the event. This includes `anythingBut`. A property without values counts as absent.
+- **Missing Properties**: A condition never matches a property that is absent from the event, except for `{"exists": false}`. This includes `anythingBut`. A property without values counts as absent.
 - **Repeated Paths**: Several properties with the same path in an event act as one property with all their values. Several conditions on the same path in a rule must all match, just like `allOf`.
 
 Here’s an example rule that matches the event above:
@@ -341,6 +342,54 @@ If the attribute value is type of:
 
 - **String**: Checks if the value matches all conditions, for example `{"allOf": [{"prefix": "web"}, {"suffix": "shop"}]}`
 - **String array**: Checks if the array contains both "shop" and "backend"
+
+### Numeric matching: "lt", "lte", "gt" and "gte"
+Numeric conditions compare a value as a number: `lt` (less than), `lte` (less than or equal), `gt` (greater than) and `gte` (greater than or equal).
+
+```javascript
+{
+    "latency_ms": {
+        "gt": 500
+    }
+}
+```
+
+If the attribute value is type of:
+
+- **String**: Checks if the value is a number greater than 500
+- **String array**: Checks if the array contains a number greater than 500
+
+Values are compared as decimal numbers such as `42`, `-1.5`, `.5` or `1e3`, so `"1e3"` and `"1000"` are equal. Values that are not numbers never match a numeric condition. You can write bounds as JSON numbers or as strings.
+
+### "between" matching
+`between` checks if a value lies between a lower and an upper bound. Each bound is a numeric condition, which decides whether the bound itself is included.
+
+```javascript
+{
+    "status_code": {
+        "between": [{"gte": 500}, {"lt": 600}]
+    }
+}
+```
+
+If the attribute value is type of:
+
+- **String**: Checks if the value is a number from 500 up to, but not including, 600
+- **String array**: Checks if the array contains such a number. Unlike an `allOf` of two numeric conditions, both bounds must hold for the same element.
+
+### "exists" matching
+`exists` checks if an attribute is present or absent.
+
+```javascript
+{
+    "owner": {
+        "exists": false
+    }
+}
+```
+
+- `{"exists": true}` matches if the event contains the attribute with at least one value, like the wildcard `*`.
+- `{"exists": false}` matches if the event does not contain the attribute, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
 
 ## Rule Identifiers
 

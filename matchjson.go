@@ -47,9 +47,8 @@ func (h *HyperMatch[T]) AppendMatchesJSON(dst []T, event []byte) ([]T, error) {
 		return dst, err
 	}
 	if tab != nil {
-		if len(sc.spans) > 0 {
-			sc.visit(&tab.root)
-		}
+		sc.absent = tab.hasAbsent.Load()
+		sc.visit(&tab.root)
 		dst = tab.results(dst, sc)
 	}
 	sc.release()

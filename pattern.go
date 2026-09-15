@@ -4,6 +4,7 @@ import (
 	"strings"
 )
 
+// PatternType is the kind of a Pattern.
 type PatternType int
 
 const (
@@ -17,15 +18,43 @@ const (
 	PatternAllOf
 
 	PatternUnknown
+
+	// The following types follow PatternUnknown, so that the values of the
+	// older types stay the same.
+
+	PatternLessThan           // "lt": a value is a number less than Value
+	PatternLessThanOrEqual    // "lte": a value is a number less than or equal to Value
+	PatternGreaterThan        // "gt": a value is a number greater than Value
+	PatternGreaterThanOrEqual // "gte": a value is a number greater than or equal to Value
+	PatternBetween            // "between": a single value satisfies the lower and the upper bound in Sub
+	PatternExists             // "exists": the property is present (Value "true") or absent (Value "false")
 )
 
+// AllValues returns all valid pattern types.
 func (p PatternType) AllValues() []PatternType {
-	return []PatternType{PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard, PatternAnythingBut, PatternAnyOf, PatternAllOf}
+	return []PatternType{PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard,
+		PatternAnythingBut, PatternAnyOf, PatternAllOf,
+		PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual,
+		PatternBetween, PatternExists}
 }
 
+// HasLiteralValue reports whether patterns of type p use Value rather than
+// Sub.
 func (p PatternType) HasLiteralValue() bool {
 	switch p {
-	case PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard:
+	case PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard,
+		PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual,
+		PatternExists:
+		return true
+	default:
+		return false
+	}
+}
+
+// isComparison reports whether p compares numbers with a single bound.
+func (p PatternType) isComparison() bool {
+	switch p {
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual:
 		return true
 	default:
 		return false
@@ -48,11 +77,25 @@ func (p PatternType) String() string {
 		return "anyOf"
 	case PatternAllOf:
 		return "allOf"
+	case PatternLessThan:
+		return "lt"
+	case PatternLessThanOrEqual:
+		return "lte"
+	case PatternGreaterThan:
+		return "gt"
+	case PatternGreaterThanOrEqual:
+		return "gte"
+	case PatternBetween:
+		return "between"
+	case PatternExists:
+		return "exists"
 	default:
 		return ""
 	}
 }
 
+// PatternTypeFromString returns the pattern type with the given name, ignoring
+// case, or PatternUnknown.
 func PatternTypeFromString(input string) PatternType {
 	switch strings.ToLower(input) {
 	case "equals":
@@ -69,6 +112,18 @@ func PatternTypeFromString(input string) PatternType {
 		return PatternAnyOf
 	case "allof":
 		return PatternAllOf
+	case "lt":
+		return PatternLessThan
+	case "lte":
+		return PatternLessThanOrEqual
+	case "gt":
+		return PatternGreaterThan
+	case "gte":
+		return PatternGreaterThanOrEqual
+	case "between":
+		return PatternBetween
+	case "exists":
+		return PatternExists
 	}
 	return PatternUnknown
 }

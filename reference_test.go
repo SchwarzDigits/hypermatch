@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -63,11 +65,50 @@ func refMatches(cs ConditionSet, event []Property) bool {
 				}
 			}
 		}
+		if c.Pattern.Type == PatternExists && c.Pattern.Value == "false" {
+			if len(values) > 0 {
+				return false
+			}
+			continue
+		}
 		if len(values) == 0 || !refSatisfies(c.Pattern, values) {
 			return false
 		}
 	}
 	return true
+}
+
+var refNumberSyntax = regexp.MustCompile(`^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$`)
+
+// refNumber parses the numbers numeric patterns compare.
+func refNumber(s string) (float64, bool) {
+	if !refNumberSyntax.MatchString(s) {
+		return 0, false
+	}
+	f, _ := strconv.ParseFloat(s, 64) // too large numbers are infinite
+	return f, true
+}
+
+// refInRange reports whether x satisfies the numeric pattern p.
+func refInRange(p Pattern, x float64) bool {
+	if p.Type == PatternBetween {
+		for _, s := range p.Sub {
+			if !refInRange(s, x) {
+				return false
+			}
+		}
+		return true
+	}
+	bound, _ := strconv.ParseFloat(p.Value, 64)
+	switch p.Type {
+	case PatternLessThan:
+		return x < bound
+	case PatternLessThanOrEqual:
+		return x <= bound
+	case PatternGreaterThan:
+		return x > bound
+	}
+	return x >= bound
 }
 
 // refSatisfies reports whether the folded values of a present property
@@ -90,6 +131,15 @@ func refSatisfies(p Pattern, values []string) bool {
 		return true
 	case PatternAnythingBut:
 		return !refSatisfies(Pattern{Type: PatternAnyOf, Sub: p.Sub}, values)
+	case PatternExists:
+		return true // only "true" gets here, and the property is present
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternBetween:
+		for _, v := range values {
+			if x, ok := refNumber(v); ok && refInRange(p, x) {
+				return true
+			}
+		}
+		return false
 	}
 	want := fold(p.Value)
 	for _, v := range values {
@@ -192,10 +242,26 @@ func genWildcard(src source) string {
 	return b.String()
 }
 
+var (
+	// genNumbers are event values for numeric patterns: numbers in several
+	// notations, infinite ones, some that need exact rounding, and others.
+	genNumbers = []string{"0", "1", "2.5", "-3", "1e2", "010", ".5", "5.", "+4", "100", "1E1", "-0", "7", "10",
+		"1e400", "-1e400", "1.0000000000000002", "9007199254740993", "abc", ""}
+	genBounds = []string{"0", "1", "2.5", "-3", "100", "1e1", "5", "10", "-0", "7"}
+)
+
+func genValue(src source) string {
+	if src.intn(3) == 0 {
+		return genNumbers[src.intn(len(genNumbers))]
+	}
+	return genString(src, 3)
+}
+
 func genPattern(src source, depth int) Pattern {
-	kinds := 7
+	const leaves = 7
+	kinds := leaves + 3
 	if depth >= 2 {
-		kinds = 4
+		kinds = leaves
 	}
 	switch k := src.intn(kinds); k {
 	case 0:
@@ -206,16 +272,59 @@ func genPattern(src source, depth int) Pattern {
 		return suffixP(genLiteral(src))
 	case 3:
 		return wildcardP(genWildcard(src))
+	case 4:
+		types := [...]PatternType{PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual}
+		return Pattern{Type: types[src.intn(len(types))], Value: genBounds[src.intn(len(genBounds))]}
+	case 5:
+		return genBetween(src)
+	case 6:
+		return Pattern{Type: PatternExists, Value: "true"}
 	default:
 		sub := make([]Pattern, 1+src.intn(3))
 		for i := range sub {
 			sub[i] = genPattern(src, depth+1)
 		}
-		return Pattern{Type: [...]PatternType{PatternAnyOf, PatternAllOf, PatternAnythingBut}[k-4], Sub: sub}
+		return Pattern{Type: [...]PatternType{PatternAnyOf, PatternAllOf, PatternAnythingBut}[k-leaves], Sub: sub}
 	}
 }
 
+func genBetween(src source) Pattern {
+	lo, hi := genBounds[src.intn(len(genBounds))], genBounds[src.intn(len(genBounds))]
+	x, _ := strconv.ParseFloat(lo, 64)
+	y, _ := strconv.ParseFloat(hi, 64)
+	if x > y {
+		lo, hi, x, y = hi, lo, y, x
+	}
+	lower, upper := PatternGreaterThanOrEqual, PatternLessThanOrEqual
+	if x < y { // open bounds would make the range empty otherwise
+		if src.intn(2) == 0 {
+			lower = PatternGreaterThan
+		}
+		if src.intn(2) == 0 {
+			upper = PatternLessThan
+		}
+	}
+	return Pattern{Type: PatternBetween, Sub: []Pattern{{Type: upper, Value: hi}, {Type: lower, Value: lo}}}
+}
+
+var existsFalse = Pattern{Type: PatternExists, Value: "false"}
+
 func genRule(src source) ConditionSet {
+	switch src.intn(8) {
+	case 0:
+		return ConditionSet{cond(genPaths[src.intn(len(genPaths))], existsFalse)}
+	case 1:
+		cs := genConditions(src)
+		path := genPaths[src.intn(len(genPaths))]
+		if !slices.ContainsFunc(cs, func(c Condition) bool { return c.Path == path }) {
+			cs = append(cs, cond(path, existsFalse))
+		}
+		return cs
+	}
+	return genConditions(src)
+}
+
+func genConditions(src source) ConditionSet {
 	cs := make(ConditionSet, 1+src.intn(3))
 	for i := range cs {
 		cs[i] = cond(genPaths[src.intn(len(genPaths))], genPattern(src, 0))
@@ -228,7 +337,7 @@ func genEvent(src source) []Property {
 	for i := range event {
 		values := make([]string, src.intn(4))
 		for j := range values {
-			values[j] = genString(src, 3)
+			values[j] = genValue(src)
 		}
 		event[i] = Property{Path: genPaths[src.intn(len(genPaths))], Values: values}
 	}

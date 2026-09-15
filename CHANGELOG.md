@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file. The format is b
 - `RemoveRule` removes rules at run time without blocking `Match`.
 - `MatchJSON` and `AppendMatchesJSON` match events given as JSON objects. They decode only the values that rules refer to, and nested objects and arrays become paths such as `alert.labels.team`.
 - `ErrInvalidEvent` for events that are not valid JSON objects.
+- Numeric patterns `lt`, `lte`, `gt`, `gte` and `between`, which compare values as numbers.
+- The `exists` pattern: `{"exists": true}` matches present properties, `{"exists": false}` absent ones.
 
 ## [2.0.0] - 2026-09-15
 
