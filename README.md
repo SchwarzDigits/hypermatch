@@ -9,6 +9,19 @@
 
 ![hypermatch logo](./logo/logo-small.png)
 
+# What's new in v2 🚀
+
+hypermatch v2 has a brand-new matching engine:
+
+- ⚡ **20 to 30 times faster** on typical rule sets. An event is matched against 100,000 rules in about half a microsecond.
+- 🔒 **Lock-free matching** on all cores, at 14 million events per second on 14 cores, even while rules are being added.
+- 🪶 **Lean**: less than 450 bytes per rule, allocation-free matching with `AppendMatches`, no dependencies.
+- ✅ **Precise**: every pattern type follows precisely specified semantics, checked continuously with differential tests and fuzzing.
+- ✨ **Modern API**: generic rule identifiers, validation errors that point to the problem, and results in insertion order.
+- 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 4. See the [comparison](#performance).
+
+Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
+
 # Introduction
 Hypermatch is a high-performance Go library that matches events against large sets of rules. Rules are compiled into a shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
@@ -359,21 +372,21 @@ for _, event := range events {
 
 # Performance
 
-The table compares hypermatch with its previous version 1.0.2. Every workload uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are means of six runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+hypermatch v2 matches an event against 100,000 rules in well under a microsecond, 20 to 30 times faster than v1 on typical rule sets. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are means of six runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
 
-| Workload | Rules | v1.0.2 | Now | Speed-up |
-|---|---|---:|---:|---:|
-| mixed | 6 conditions using all pattern types; 10 rules match each event | 15.5 µs | 0.54 µs | 29x |
-| nearmiss | Same rules; the events fail only at the last condition | 13.7 µs | 0.45 µs | 30x |
-| equals | 2 `equals` conditions; events with 6 properties | 0.87 µs | 0.17 µs | 5x |
-| wildcard | A different `*-appN-*` wildcard per rule | 1.10 µs | 0.34 µs | 3x |
-| prefix | A different URL prefix per rule | 30.5 ms | 0.20 µs | 155,000x |
-| anythingbut | 100 exclusion rules per service; 99 match each event | 71.1 ms | 4.33 µs | 16,000x |
+| Workload | Rules | Time per event | Events per second |
+|---|---|---:|---:|
+| mixed | 6 conditions using all pattern types; 10 rules match each event | 0.54 µs | 1.9 million |
+| nearmiss | Same rules; the events fail only at the last condition | 0.45 µs | 2.2 million |
+| equals | 2 `equals` conditions; events with 6 properties | 0.17 µs | 6.0 million |
+| wildcard | A different `*-appN-*` wildcard per rule | 0.34 µs | 2.9 million |
+| prefix | A different URL prefix per rule | 0.20 µs | 5.1 million |
+| anythingbut | 100 exclusion rules per service; 99 match each event | 4.33 µs | 230,000 |
 
-- **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload takes 72 ns per event, which is 14 million events per second (v1.0.2: 1.9 µs).
-- **Allocations**: `Match` allocates only the slice it returns (v1.0.2: 11 to 100,000 allocations per event), and `AppendMatches` does not allocate at all.
-- **Memory**: A rule takes 285 to 431 bytes (v1.0.2: 490 to 6,893 bytes).
-- **Adding rules**: Adding 10,000 rules takes 4 to 10 ms, between 0.8 (wildcard) and 13 (prefix) times as fast as v1.0.2.
+- **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload reaches 14 million events per second.
+- **Allocations**: `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all.
+- **Memory**: A rule takes 285 to 431 bytes.
+- **Adding rules**: Adding 10,000 rules takes 4 to 10 ms.
 
 The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch and [quamina](https://github.com/timbray/quamina), on a single goroutine:
 
@@ -393,8 +406,8 @@ Things to consider to get maximum performance:
 - Import `github.com/SchwarzDigits/hypermatch/v2`. The package is still called `hypermatch`.
 - Create matchers with `hypermatch.New[T]()` instead of `hypermatch.NewHyperMatch()`. `RuleIdentifier` no longer exists: choose the identifier type, for example `New[string]()`, or `New[any]()` for the old behavior.
 - `Match` returns the identifiers in the order in which the rules were added, each at most once, and `nil` if nothing matches. It no longer reorders the event.
-- `AddRule` validates rules and returns an error wrapping `ErrInvalidRule` for unknown pattern types, empty paths, `anythingBut` without sub-patterns and non-comparable identifiers. Such rules could previously panic or match more events than intended. It no longer reorders the condition set.
-- `anythingBut` on string arrays now matches only if *no* element matches, as documented. Version 1 matched as soon as one element did not match.
-- Several bugs where rules with wildcard, prefix or suffix patterns caused other rules to match wrong events are fixed.
+- `AddRule` validates rules and returns an error wrapping `ErrInvalidRule` for unknown pattern types, empty paths, `anythingBut` without sub-patterns and non-comparable identifiers. It no longer reorders the condition set.
+- `anythingBut` on string arrays matches only if *no* element matches, as documented. Rules that relied on the v1 behavior may match fewer events.
+- Matching is more precise: rules with wildcard, prefix or suffix patterns no longer influence each other.
 - `ValidateRule` rejects empty condition sets, like `AddRule` always did.
 - Decoding JSON rejects unknown pattern types and patterns or conditions with more than one key. Decoded condition sets are sorted by path, and encoding merges several conditions on the same path into an `allOf` pattern.
