@@ -454,20 +454,21 @@ matches, err := hm.MatchJSON([]byte(`{
 
 # Performance
 
-hypermatch v2 matches an event against 100,000 rules in well under a microsecond, 20 to 30 times faster than v1 on typical rule sets. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are means of six runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+hypermatch v2 matches an event against 100,000 rules in well under a microsecond, 20 to 30 times faster than v1 on typical rule sets. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are medians of five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
 
 | Workload | Rules | Time per event | Events per second |
 |---|---|---:|---:|
-| mixed | 6 conditions using all pattern types; 10 rules match each event | 0.54 µs | 1.9 million |
-| nearmiss | Same rules; the events fail only at the last condition | 0.45 µs | 2.2 million |
-| equals | 2 `equals` conditions; events with 6 properties | 0.17 µs | 6.0 million |
+| mixed | 6 conditions of different pattern types; 10 rules match each event | 0.54 µs | 1.9 million |
+| nearmiss | Same rules; the events fail only at the last condition | 0.46 µs | 2.2 million |
+| equals | 2 `equals` conditions; events with 6 properties | 0.17 µs | 5.8 million |
 | wildcard | A different `*-appN-*` wildcard per rule | 0.34 µs | 2.9 million |
-| prefix | A different URL prefix per rule | 0.20 µs | 5.1 million |
-| anythingbut | 100 exclusion rules per service; 99 match each event | 4.33 µs | 230,000 |
+| prefix | A different URL prefix per rule | 0.20 µs | 4.9 million |
+| numeric | 10 latency thresholds per service; 6 rules match each event | 0.34 µs | 2.9 million |
+| anythingbut | 100 exclusion rules per service; 99 match each event | 3.78 µs | 260,000 |
 
 - **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload reaches 14 million events per second.
 - **Allocations**: `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all.
-- **JSON events**: `MatchJSON` matches the events of the mixed workload, given as JSON, in 0.67 µs. That is 3.4 times as fast as `json.Unmarshal` followed by `Match` (2.27 µs).
+- **JSON events**: `MatchJSON` matches the events of the mixed workload, given as JSON, in 0.65 µs. That is 3.5 times as fast as `json.Unmarshal` followed by `Match` (2.27 µs).
 - **Memory**: A rule takes 285 to 431 bytes.
 - **Adding rules**: Adding 10,000 rules takes 4 to 10 ms.
 
