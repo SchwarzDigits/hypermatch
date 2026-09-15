@@ -15,15 +15,19 @@ func diffAgainstReference(src source, ops int) error {
 	h := New[int]()
 	ref := &refMatcher{}
 	for i := range ops {
-		switch op := src.intn(6); {
+		switch op := src.intn(7); {
 		case op < 2:
 			event := genEvent(src)
-			if got, want := h.Match(event), ref.match(event); !slices.Equal(got, want) {
+			want := ref.match(event)
+			if got := h.Match(event); !slices.Equal(got, want) {
 				var rules strings.Builder
 				for _, r := range ref.rules {
 					fmt.Fprintf(&rules, "  %d: %s\n", r.id, fmtRule(r.cs))
 				}
 				return fmt.Errorf("event %s:\n got %v\nwant %v\nrules:\n%s", fmtEvent(event), got, want, rules.String())
+			}
+			if first, ok := h.MatchFirst(event); ok != (len(want) > 0) || (ok && first != want[0]) {
+				return fmt.Errorf("MatchFirst(%s) = %v, %v, want the first of %v", fmtEvent(event), first, ok, want)
 			}
 			if got, want := h.RuleCount(), len(ref.order); got != want {
 				return fmt.Errorf("RuleCount = %d, want %d", got, want)
@@ -34,6 +38,14 @@ func diffAgainstReference(src source, ops int) error {
 			if got, want := h.RemoveRule(id), ref.remove(id); got != want {
 				return fmt.Errorf("RemoveRule(%d) = %v, want %v", id, got, want)
 			}
+			continue
+		case op == 3 && i > 0:
+			id := src.intn(i)
+			cs := genRule(src)
+			if err := h.ReplaceRule(id, cs); err != nil {
+				return fmt.Errorf("ReplaceRule(%d, %s): %w", id, fmtRule(cs), err)
+			}
+			ref.replace(id, cs)
 			continue
 		}
 		id := i

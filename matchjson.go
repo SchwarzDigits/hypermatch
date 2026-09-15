@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/maphash"
+	"math"
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -42,17 +43,50 @@ func (h *HyperMatch[T]) AppendMatchesJSON(dst []T, event []byte) ([]T, error) {
 		t = &tab.trie
 	}
 	sc := scratchPool.Get().(*scratch)
+	var ids []T
+	if tab != nil {
+		// Before parsing: the paths a replacement adds are known before its
+		// version is published.
+		ids = tab.begin(sc)
+	}
 	if err := sc.resetJSON(event, t); err != nil {
 		sc.release()
 		return dst, err
 	}
 	if tab != nil {
-		sc.absent = tab.hasAbsent.Load()
 		sc.visit(&tab.root)
-		dst = tab.results(dst, sc)
+		dst = tab.results(dst, sc, ids)
 	}
 	sc.release()
 	return dst, nil
+}
+
+// MatchFirstJSON is like MatchFirst, but takes the event as a JSON object,
+// like MatchJSON.
+func (h *HyperMatch[T]) MatchFirstJSON(event []byte) (id T, ok bool, err error) {
+	tab := h.tab.Load()
+	t := &emptyTrie
+	if tab != nil {
+		t = &tab.trie
+	}
+	sc := scratchPool.Get().(*scratch)
+	var ids []T
+	if tab != nil {
+		ids = tab.begin(sc)
+	}
+	if err := sc.resetJSON(event, t); err != nil {
+		sc.release()
+		return id, false, err
+	}
+	if tab != nil {
+		sc.first, sc.bestKey = true, math.MaxUint32
+		sc.visit(&tab.root)
+		if sc.bestKey != math.MaxUint32 {
+			id, ok = ids[sc.best], true
+		}
+	}
+	sc.release()
+	return id, ok, nil
 }
 
 // emptyTrie stands in for the rules of an empty HyperMatch. It is never
@@ -69,6 +103,7 @@ type jval struct {
 // of t. It collects the folded values of the paths t refers to and groups
 // them into spans, like reset does for properties.
 func (sc *scratch) resetJSON(data []byte, t *trie) error {
+	sc.first = false
 	sc.props = sc.props[:0]
 	sc.spans = sc.spans[:0]
 	sc.initSlots(16)

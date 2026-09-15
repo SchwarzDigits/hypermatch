@@ -34,6 +34,16 @@ func (r *refMatcher) add(id int, cs ConditionSet) {
 	r.rules = append(r.rules, refRule{id, cs})
 }
 
+// replace replaces the rules of id with cs, keeping its position.
+func (r *refMatcher) replace(id int, cs ConditionSet) {
+	if _, ok := r.order[id]; !ok {
+		r.add(id, cs)
+		return
+	}
+	r.rules = slices.DeleteFunc(r.rules, func(rule refRule) bool { return rule.id == id })
+	r.rules = append(r.rules, refRule{id, cs})
+}
+
 func (r *refMatcher) remove(id int) bool {
 	if _, ok := r.order[id]; !ok {
 		return false

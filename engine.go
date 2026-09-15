@@ -42,7 +42,16 @@ type state struct {
 	glist  list[*group]                  // the same groups, for iteration
 	absent atomic.Pointer[[]*absentEdge] // conditions that hold if their path is absent; copied on write
 	rule   atomic.Uint32                 // 1 + number of the first rule ending here, or 0
+	minKey atomic.Uint32                 // 1 + the smallest order key of the rules in the subtree, or 0 if there are none
 	rules  list[uint32]                  // numbers of further rules ending here
+}
+
+// lowerMinKey records that a rule with the order key key ends in the subtree
+// of s. Writer only.
+func (s *state) lowerMinKey(key uint32) {
+	if m := s.minKey.Load(); m == 0 || key+1 < m {
+		s.minKey.Store(key + 1)
+	}
 }
 
 // absentEdge is a condition {"exists": false}, which holds if the event has
@@ -186,12 +195,16 @@ func (f *formula) triggers() []uint32 {
 	}
 }
 
-// insert adds the path of conds and returns the state it ends in. Writer
-// only. Everything a reader can reach is complete before it is published.
-func (t *trie) insert(conds []condition) *state {
+// insert adds the path of conds for a rule with the order key key and
+// returns the state it ends in. Writer only. Everything a reader can reach is
+// complete before it is published, and the order keys along the path are
+// lowered before the caller adds the rule to the returned state.
+func (t *trie) insert(conds []condition, key uint32) *state {
 	s := &t.root
+	s.lowerMinKey(key)
 	for _, c := range conds {
 		s = t.follow(s, c)
+		s.lowerMinKey(key)
 	}
 	return s
 }
@@ -265,12 +278,15 @@ func (t *trie) copyRules(src *trie, renum []uint32) {
 }
 
 func (t *trie) copyState(s *state, prefix []condition, renum []uint32) {
-	var dst *state
+	var live []uint32
 	for _, n := range s.appendRules(nil) {
 		if m := renum[n]; m != noRule {
-			if dst == nil {
-				dst = t.insert(prefix)
-			}
+			live = append(live, m)
+		}
+	}
+	if len(live) > 0 {
+		dst := t.insert(prefix, slices.Min(live)) // the new numbers are the order keys
+		for _, m := range live {
 			dst.addRule(m)
 		}
 	}
@@ -325,6 +341,17 @@ type scratch struct {
 	globCur  []*globNode
 	globNext []*globNode
 	absent   bool // the rules contain {"exists": false} conditions
+
+	// The rules visible to this call, loaded before the traversal.
+	version uint32   // of the table, see ReplaceRule
+	limit   uint32   // rules from this number on were added during the call
+	removed []uint64 // words of the removed rules
+	meta    []uint64 // words of the ruleMeta
+
+	// MatchFirst only.
+	first   bool   // look for the visible rule with the smallest order key
+	best    uint32 // its number
+	bestKey uint32 // its order key, or math.MaxUint32 if none was found
 
 	// MatchJSON only.
 	jvals []jval // values found, before they are grouped into spans
@@ -404,6 +431,52 @@ func (sc *scratch) reset(event []Property) {
 	sc.fbuf = sc.fbuf[:0]
 	sc.frefs = sc.frefs[:0]
 	sc.out = sc.out[:0]
+	sc.first = false
+}
+
+// visible reports whether rule n is one of the rules this call matches.
+func (sc *scratch) visible(n uint32) bool {
+	if n >= sc.limit || bitsHas(sc.removed, n) {
+		return false
+	}
+	if sc.meta == nil {
+		return true
+	}
+	from, until := metaSpan(sc.meta, n)
+	return from <= sc.version && (until == 0 || sc.version < until)
+}
+
+// key returns the order key of rule n: the position of its identifier in
+// the results of Match.
+func (sc *scratch) key(n uint32) uint32 {
+	if sc.meta == nil {
+		return n
+	}
+	return metaOrder(sc.meta, n)
+}
+
+// improve updates the best rule of MatchFirst with the rules ending in s
+// and reports whether the subtree of s can contain a better one.
+func (sc *scratch) improve(s *state) bool {
+	if m := s.minKey.Load(); m == 0 || m-1 >= sc.bestKey {
+		return false
+	}
+	if r := s.rule.Load(); r != 0 {
+		sc.consider(r - 1)
+		for _, n := range s.rules.load() {
+			sc.consider(n)
+		}
+	}
+	return true
+}
+
+func (sc *scratch) consider(n uint32) {
+	if !sc.visible(n) {
+		return
+	}
+	if k := sc.key(n); k < sc.bestKey {
+		sc.best, sc.bestKey = n, k
+	}
 }
 
 // initSlots empties the span table and resizes it to size slots.
@@ -417,9 +490,10 @@ func (sc *scratch) initSlots(size int) {
 }
 
 func (sc *scratch) release() {
-	// Do not retain the caller's strings.
+	// Do not retain the caller's strings or old tables.
 	clear(sc.props)
 	clear(sc.spans)
+	sc.removed, sc.meta = nil, nil
 	if cap(sc.out) > 1<<16 || cap(sc.fbuf) > 1<<20 {
 		return // let oversized buffers be collected
 	}
@@ -442,7 +516,13 @@ func (sc *scratch) find(path string, h uint64) *span {
 
 // visit collects the rules of s and follows every condition that holds.
 func (sc *scratch) visit(s *state) {
-	sc.out = s.appendRules(sc.out)
+	if sc.first {
+		if !sc.improve(s) {
+			return
+		}
+	} else {
+		sc.out = s.appendRules(sc.out)
+	}
 	if sc.absent {
 		if p := s.absent.Load(); p != nil {
 			for _, a := range *p {
@@ -550,6 +630,13 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 		}
 	}
 	end := len(sc.edges)
+	if sc.first && end-start > 1 {
+		// Visit the subtrees with the smallest order keys first. A minKey of
+		// 0 wraps around and sorts last.
+		slices.SortFunc(sc.edges[start:end], func(a, b *edge) int {
+			return cmp.Compare(a.next.minKey.Load()-1, b.next.minKey.Load()-1)
+		})
+	}
 	for i := start; i < end; i++ {
 		sc.visit(sc.edges[i].next)
 	}

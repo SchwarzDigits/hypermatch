@@ -121,6 +121,149 @@ func ExampleHyperMatch_MatchJSON() {
 	// Output: [shop-team] <nil>
 }
 
+// Example_alertRouting routes alerts to the first matching route. Specific
+// routes are added before general ones, so MatchFirst picks the most
+// specific route.
+func Example_alertRouting() {
+	routes := hypermatch.New[string]()
+	add := func(route string, rule hypermatch.ConditionSet) {
+		if err := routes.AddRule(route, rule); err != nil {
+			panic(err)
+		}
+	}
+	add("shop-oncall", hypermatch.ConditionSet{
+		{Path: "team", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "shop"}},
+		{Path: "severity", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "critical"}},
+	})
+	add("shop-channel", hypermatch.ConditionSet{
+		{Path: "team", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "shop"}},
+	})
+	add("catch-all", hypermatch.ConditionSet{
+		{Path: "alertname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternExists, Value: "true"}},
+	})
+
+	for _, alert := range []string{
+		`{"alertname": "CheckoutDown", "team": "shop", "severity": "critical"}`,
+		`{"alertname": "SlowSearch", "team": "shop", "severity": "warning"}`,
+		`{"alertname": "DiskFull", "team": "infra", "severity": "critical"}`,
+	} {
+		route, _, err := routes.MatchFirstJSON([]byte(alert))
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(route)
+	}
+	// Output:
+	// shop-oncall
+	// shop-channel
+	// catch-all
+}
+
+// Example_subscriptions notifies users about prices below the limits they
+// subscribed to.
+func Example_subscriptions() {
+	alerts := hypermatch.New[string]()
+	subscribe := func(user, symbol, below string) {
+		err := alerts.AddRule(user+": "+symbol+" below "+below, hypermatch.ConditionSet{
+			{Path: "symbol", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: symbol}},
+			{Path: "price", Pattern: hypermatch.Pattern{Type: hypermatch.PatternLessThan, Value: below}},
+		})
+		if err != nil {
+			panic(err)
+		}
+	}
+	subscribe("anna", "ACME", "100")
+	subscribe("ben", "ACME", "90")
+	subscribe("carla", "GLOBEX", "50")
+
+	fmt.Println(alerts.MatchJSON([]byte(`{"symbol": "ACME", "price": 95.5}`)))
+	// Output: [anna: ACME below 100] <nil>
+}
+
+// Example_featureTargeting decides which users get a feature from their
+// attributes.
+func Example_featureTargeting() {
+	features := hypermatch.New[string]()
+	err := features.AddRule("new-checkout", hypermatch.ConditionSet{
+		{Path: "country", Pattern: hypermatch.Pattern{Type: hypermatch.PatternAnyOf, Sub: []hypermatch.Pattern{
+			{Type: hypermatch.PatternEquals, Value: "de"},
+			{Type: hypermatch.PatternEquals, Value: "at"},
+		}}},
+		{Path: "age", Pattern: hypermatch.Pattern{Type: hypermatch.PatternBetween, Sub: []hypermatch.Pattern{
+			{Type: hypermatch.PatternGreaterThanOrEqual, Value: "18"},
+			{Type: hypermatch.PatternLessThan, Value: "65"},
+		}}},
+		{Path: "opt_out", Pattern: hypermatch.Pattern{Type: hypermatch.PatternExists, Value: "false"}},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, user := range []string{
+		`{"country": "DE", "age": 34}`,
+		`{"country": "DE", "age": 34, "opt_out": true}`,
+		`{"country": "FR", "age": 34}`,
+	} {
+		matches, _ := features.MatchJSON([]byte(user))
+		fmt.Println(matches)
+	}
+	// Output:
+	// [new-checkout]
+	// []
+	// []
+}
+
+func ExampleHyperMatch_ReplaceRule() {
+	hm := hypermatch.New[string]()
+	for _, name := range []string{"first", "second"} {
+		err := hm.AddRule(name, hypermatch.ConditionSet{
+			{Path: "env", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "prod"}},
+		})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// The replacement is atomic and keeps the position of "first".
+	err := hm.ReplaceRule("first", hypermatch.ConditionSet{
+		{Path: "env", Pattern: hypermatch.Pattern{Type: hypermatch.PatternPrefix, Value: "pr"}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(hm.Match([]hypermatch.Property{{Path: "env", Values: []string{"prod"}}}))
+	fmt.Println(hm.Match([]hypermatch.Property{{Path: "env", Values: []string{"preview"}}}))
+	// Output:
+	// [first second]
+	// [first]
+}
+
+func ExampleExplain() {
+	rule := hypermatch.ConditionSet{
+		{Path: "status", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "firing"}},
+		{Path: "severity", Pattern: hypermatch.Pattern{Type: hypermatch.PatternAnyOf, Sub: []hypermatch.Pattern{
+			{Type: hypermatch.PatternEquals, Value: "critical"},
+			{Type: hypermatch.PatternEquals, Value: "warning"},
+		}}},
+		{Path: "owner", Pattern: hypermatch.Pattern{Type: hypermatch.PatternExists, Value: "false"}},
+	}
+	explanation, err := hypermatch.Explain(rule, []hypermatch.Property{
+		{Path: "status", Values: []string{"FIRING"}},
+		{Path: "severity", Values: []string{"info"}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(explanation)
+	// Output:
+	// no match
+	//   ✓ status: {"equals":"firing"} matched "FIRING"
+	//   ✗ severity: {"anyOf":[{"equals":"critical"},{"equals":"warning"}]} (values ["info"])
+	//       ✗ {"equals":"critical"}
+	//       ✗ {"equals":"warning"}
+	//   ✓ owner: {"exists":false} (absent)
+}
+
 func ExampleHyperMatch_RemoveRule() {
 	hm := hypermatch.New[string]()
 	for _, team := range []string{"shop", "search"} {

@@ -347,6 +347,30 @@ func BenchmarkUnmarshalAndMatch(b *testing.B) {
 	}
 }
 
+// BenchmarkMatchFirst finds only the first matching rule of each event.
+func BenchmarkMatchFirst(b *testing.B) {
+	const n = 100_000
+	for _, w := range benchWorkloads {
+		if w.wantMatches == 0 {
+			continue
+		}
+		b.Run(fmt.Sprintf("%s/rules=%d", w.name, n), func(b *testing.B) {
+			h := newBenchMatcher(b, w, n)
+			events := benchEvents(w, n)
+			runtime.GC()
+			b.ReportAllocs()
+			var found, i int
+			for b.Loop() {
+				if _, ok := h.MatchFirst(events[i%len(events)]); ok {
+					found++
+				}
+				i++
+			}
+			benchSink.Add(int64(found))
+		})
+	}
+}
+
 // BenchmarkMatchWithRemovedRules measures the mixed workload after removing
 // every fifth of 100,000 rules, which is not enough to compact the matcher.
 func BenchmarkMatchWithRemovedRules(b *testing.B) {
