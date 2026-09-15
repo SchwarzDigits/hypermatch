@@ -20,12 +20,15 @@
 // automaton indexes, so the cost of matching an event depends on the event
 // and on the rules it matches, and hardly on the total number of rules.
 // [HyperMatch] is safe for concurrent use, and Match is lock-free. Rules can
-// be added and removed at any time with [HyperMatch.AddRule] and
-// [HyperMatch.RemoveRule].
+// be added, replaced and removed at any time with [HyperMatch.AddRule],
+// [HyperMatch.ReplaceRule] and [HyperMatch.RemoveRule].
+// [HyperMatch.MatchFirst] returns only the rule with the highest priority,
+// which is the one added first.
 //
 // Events that arrive as JSON can be matched directly with
 // [HyperMatch.MatchJSON], which decodes only the values rules refer to.
-// Nested objects become paths joined with ".".
+// Nested objects become paths joined with ".". [Explain] shows how a rule
+// matches an event, condition by condition.
 //
 // Rules can also be written as JSON (see [ConditionSet.UnmarshalJSON]):
 //

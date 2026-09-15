@@ -10,6 +10,10 @@ All notable changes to this project are documented in this file. The format is b
 - `ErrInvalidEvent` for events that are not valid JSON objects.
 - Numeric patterns `lt`, `lte`, `gt`, `gte` and `between`, which compare values as numbers.
 - The `exists` pattern: `{"exists": true}` matches present properties, `{"exists": false}` absent ones.
+- `ReplaceRule` replaces a rule atomically: every `Match` sees either the old or the new rule, and the rule keeps its position in the results.
+- `MatchFirst` and `MatchFirstJSON` return only the first matching rule and skip all rules that cannot come earlier.
+- `Explain` and `ExplainJSON` report condition by condition how a rule matches an event.
+- A section on use cases in the README, and runnable examples for alert routing, subscriptions and feature targeting.
 
 ## [2.0.0] - 2026-09-15
 

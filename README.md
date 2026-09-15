@@ -21,6 +21,8 @@ hypermatch v2 has a brand-new matching engine:
 - 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly, 3 to 5 times as fast as decoding them first.
 - 🔄 **Live rule updates**: `RemoveRule` removes rules at run time without ever blocking `Match`.
 - 🔢 **Numbers and missing fields**: compare values numerically with `lt`, `lte`, `gt`, `gte` and `between`, and match present or absent fields with `exists`.
+- 🎯 **Routing**: `MatchFirst` finds the highest-priority rule and skips everything that cannot beat it, and `ReplaceRule` swaps rules atomically.
+- 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not.
 - 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 5. See the [comparison](#performance).
 
 Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
@@ -84,6 +86,20 @@ func main() {
 }
 ```
 
+# Use Cases
+
+hypermatch fits wherever many rules have to be checked against a stream of events:
+
+- **Alert routing**: Route alerts from Prometheus, Grafana or any monitoring system to teams, channels and on-call schedules. Each team owns rules like `{"team": {"equals": "shop"}, "severity": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}}`, and `MatchFirst` picks the route with the highest priority.
+- **Event-driven automation**: Trigger workflows, webhooks or functions for the events on a message bus such as Kafka, NATS or SQS, similar to the event patterns of AWS EventBridge. `MatchJSON` works directly on the raw messages.
+- **Subscriptions and notifications**: Let users subscribe to events with their own filters, for example price alerts like `{"symbol": {"equals": "ACME"}, "price": {"lt": 100}}` or "tell me about new issues labeled bug". Hundreds of thousands of subscriptions are no problem.
+- **Feature flags and targeting**: Decide from their attributes which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
+- **IoT and telemetry**: Detect sensor readings outside their normal range with `between`, `lt` and `gt`, per device type or site.
+- **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths or logins from unusual places, with prefix, suffix and wildcard patterns.
+- **Content-based routing**: Route orders, tickets or documents to the queues or services responsible for their content.
+
+The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions and feature targeting in code.
+
 # Documentation
 ## Which Method to Use
 
@@ -93,7 +109,9 @@ func main() {
 | Go values you already have | `Match` | No encoding needed: build a `[]Property` from your data |
 
 - **Hot loops**: Use `AppendMatchesJSON` or `AppendMatches` and reuse the result slice. Matching then does not allocate at all.
-- **Changing rules**: Add and remove rules at any time with `AddRule` and `RemoveRule`, even while other goroutines are matching.
+- **Only the best match**: If an event needs just one rule, for example to route it, use `MatchFirst` or `MatchFirstJSON` and add the rules in the order of their priority. They skip everything that cannot beat the best rule found so far.
+- **Changing rules**: Add, replace and remove rules at any time with `AddRule`, `ReplaceRule` and `RemoveRule`, even while other goroutines are matching.
+- **Debugging rules**: `Explain` shows condition by condition why a rule matches an event or not.
 
 ## Example Event
 
@@ -397,7 +415,9 @@ If the attribute value is type of:
 
 - `Match` returns the identifiers of all matching rules in the order in which they were first added, each at most once, or `nil` if no rule matches.
 - Adding several condition sets under the same identifier combines them with a boolean "or": the identifier matches if any of its condition sets matches.
+- `ReplaceRule` replaces all condition sets of an identifier atomically: every `Match` sees either the old or the new rule, never both or neither, and the identifier keeps its position in the results.
 - `RemoveRule` removes all condition sets of an identifier at run time. Adding the identifier again later counts as adding a new rule.
+- `MatchFirst` returns only the first identifier `Match` would return. It does not allocate and skips the parts of the rules that cannot contain an earlier rule.
 - `RuleCount` returns the number of distinct identifiers.
 
 ## Validation
@@ -416,7 +436,7 @@ if errors.Is(err, hypermatch.ErrInvalidRule) {
 All methods of `HyperMatch` are safe for concurrent use:
 
 - `Match` never blocks. It runs lock-free and scales with the number of cores, even while other goroutines add or remove rules.
-- `AddRule` and `RemoveRule` calls are serialized. Their effect is visible to every `Match` call that starts after they returned.
+- `AddRule`, `ReplaceRule` and `RemoveRule` calls are serialized. Their effect is visible to every `Match` call that starts after they returned.
 - Once a quarter of the compiled rules have been removed, `RemoveRule` compacts them, which takes about as long as adding the remaining rules again. `Match` keeps running meanwhile.
 
 The zero value of `HyperMatch` is ready to use.
@@ -451,6 +471,26 @@ matches, err := hm.MatchJSON([]byte(`{
 - **Errors**: Invalid JSON is rejected with an error wrapping `ErrInvalidEvent`.
 
 `AppendMatchesJSON` appends to a slice you provide, like `AppendMatches`.
+
+## Explaining Matches
+
+`Explain` reports condition by condition how a rule matches an event, which helps when a rule does not do what you expect. `ExplainJSON` does the same for JSON events.
+
+```go
+explanation, err := hypermatch.Explain(rule, event)
+fmt.Print(explanation)
+```
+
+```
+no match
+  ✓ status: {"equals":"firing"} matched "FIRING"
+  ✗ severity: {"anyOf":[{"equals":"critical"},{"equals":"warning"}]} (values ["info"])
+      ✗ {"equals":"critical"}
+      ✗ {"equals":"warning"}
+  ✓ owner: {"exists":false} (absent)
+```
+
+The `Explanation` holds the same information in fields, for example to show it in a user interface. `Explain` follows exactly the semantics of `Match`, but it is meant for debugging rather than speed.
 
 # Performance
 
