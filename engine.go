@@ -351,10 +351,10 @@ type span struct {
 // vref is the position of a folded value in fbuf, together with its hash
 // and its numeric value once computed.
 type vref struct {
-	lo, hi int
+	lo, hi uint32
 	hash   uint64
-	hashed bool
 	num    float64
+	hashed bool
 	parsed bool // num and isNum are set
 	isNum  bool
 }
@@ -486,7 +486,7 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 			for _, v := range sc.props[i].values {
 				lo := len(sc.fbuf)
 				sc.fbuf = appendFold(sc.fbuf, v)
-				sc.frefs = append(sc.frefs, vref{lo: lo, hi: len(sc.fbuf)})
+				sc.frefs = append(sc.frefs, vref{lo: uint32(lo), hi: uint32(len(sc.fbuf))})
 			}
 		}
 		sp.fhi = len(sc.frefs)
@@ -495,9 +495,24 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 
 	kinds := g.index.kinds.Load() // after neg, for the same reason
 	hits := sc.hits[:0]
-	for i := sp.flo; i < sp.fhi; i++ {
-		r := &sc.frefs[i]
-		hits = g.index.collect(sc.fbuf[r.lo:r.hi], r, hits, sc, kinds)
+	if kinds == 1<<leafEquals {
+		// Most groups only compare with equals: look the values up directly.
+		t := g.index.equals.t.Load()
+		for i := sp.flo; i < sp.fhi; i++ {
+			r := &sc.frefs[i]
+			v := sc.fbuf[r.lo:r.hi]
+			if !r.hashed {
+				r.hash, r.hashed = maphash.Bytes(hashSeed, v), true
+			}
+			if l, ok := t.lookupBytes(r.hash, v); ok {
+				hits = append(hits, l)
+			}
+		}
+	} else {
+		for i := sp.flo; i < sp.fhi; i++ {
+			r := &sc.frefs[i]
+			hits = g.index.collect(sc.fbuf[r.lo:r.hi], r, hits, sc, kinds)
+		}
 	}
 	if kinds&(1<<leafExists) != 0 {
 		if l := g.index.exists.Load(); l != nil {

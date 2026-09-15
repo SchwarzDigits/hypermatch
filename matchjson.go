@@ -115,7 +115,7 @@ func (sc *scratch) groupJSONValues() {
 	sc.frefs = sc.frefs[:n]
 	for _, v := range sc.jvals {
 		sp := &sc.spans[v.span]
-		sc.frefs[sp.fhi] = vref{lo: v.lo, hi: v.hi}
+		sc.frefs[sp.fhi] = vref{lo: uint32(v.lo), hi: uint32(v.hi)}
 		sp.fhi++
 	}
 }
