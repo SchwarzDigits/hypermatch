@@ -2,7 +2,7 @@
 [![CI](https://github.com/SchwarzDigits/hypermatch/actions/workflows/go-test.yml/badge.svg)](https://github.com/SchwarzDigits/hypermatch/actions/workflows/go-test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/SchwarzDigits/hypermatch/badge.svg?branch=main)](https://coveralls.io/github/SchwarzDigits/hypermatch?branch=main)
 [![Go Report Card](https://goreportcard.com/badge/github.com/SchwarzDigits/hypermatch)](https://goreportcard.com/report/github.com/SchwarzDigits/hypermatch)
-[![Go Reference](https://pkg.go.dev/badge/github.com/schwarzdigits/hypermatch.svg)](https://pkg.go.dev/github.com/schwarzdigits/hypermatch)
+[![Go Reference](https://pkg.go.dev/badge/github.com/SchwarzDigits/hypermatch/v2.svg)](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2)
 ![License](https://img.shields.io/github/license/SchwarzDigits/hypermatch)
 ![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/SchwarzDigits/hypermatch)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)  
@@ -26,7 +26,7 @@ An event consists of a list of fields, provided as name/value pairs. A rule link
 # Installation
 
 ```sh
-go get github.com/SchwarzDigits/hypermatch
+go get github.com/SchwarzDigits/hypermatch/v2
 ```
 
 Hypermatch requires Go 1.24 or later.
@@ -37,7 +37,7 @@ Hypermatch requires Go 1.24 or later.
 import (
     "log"
 
-    "github.com/SchwarzDigits/hypermatch"
+    "github.com/SchwarzDigits/hypermatch/v2"
 )
 
 func main() {
@@ -390,6 +390,7 @@ Things to consider to get maximum performance:
 
 # Migrating from v1
 
+- Import `github.com/SchwarzDigits/hypermatch/v2`. The package is still called `hypermatch`.
 - Create matchers with `hypermatch.New[T]()` instead of `hypermatch.NewHyperMatch()`. `RuleIdentifier` no longer exists: choose the identifier type, for example `New[string]()`, or `New[any]()` for the old behavior.
 - `Match` returns the identifiers in the order in which the rules were added, each at most once, and `nil` if nothing matches. It no longer reorders the event.
 - `AddRule` validates rules and returns an error wrapping `ErrInvalidRule` for unknown pattern types, empty paths, `anythingBut` without sub-patterns and non-comparable identifiers. Such rules could previously panic or match more events than intended. It no longer reorders the condition set.

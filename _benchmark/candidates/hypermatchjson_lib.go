@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/SchwarzDigits/hypermatch"
+	"github.com/SchwarzDigits/hypermatch/v2"
 )
 
 type HypermatchJson struct {

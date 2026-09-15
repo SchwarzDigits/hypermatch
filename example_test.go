@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/SchwarzDigits/hypermatch"
+	"github.com/SchwarzDigits/hypermatch/v2"
 )
 
 func Example() {

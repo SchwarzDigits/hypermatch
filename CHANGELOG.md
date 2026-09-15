@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-09-15
 
 The matching engine has been rewritten for correctness, speed and concurrent use. See [Migrating from v1](README.md#migrating-from-v1) for the API changes.
 
@@ -14,6 +14,7 @@ The matching engine has been rewritten for correctness, speed and concurrent use
 - Runnable examples, benchmarks, and differential and fuzz tests against a reference implementation of the documented semantics.
 
 ### Changed
+- The module path is `github.com/SchwarzDigits/hypermatch/v2`.
 - `HyperMatch` is generic over the rule identifier type: `New[T]()` replaces `NewHyperMatch()` and `RuleIdentifier`.
 - Rules are compiled into a trie of shared, normalized conditions with hash and automaton indexes. Matching is several times to several orders of magnitude faster, and rules use less memory. See [Performance](README.md#performance).
 - `Match` returns the identifiers in the order in which the rules were first added, without duplicates, and `nil` if no rule matches.
@@ -33,3 +34,5 @@ The matching engine has been rewritten for correctness, speed and concurrent use
 
 ### Removed
 - The dependency on `gotest.tools`.
+
+[2.0.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.0.0

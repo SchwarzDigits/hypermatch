@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/SchwarzDigits/hypermatch"
+	"github.com/SchwarzDigits/hypermatch/v2"
 )
 
 type Hypermatch struct {
