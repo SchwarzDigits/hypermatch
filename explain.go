@@ -16,12 +16,15 @@ type Explanation struct {
 	Conditions []ConditionResult `json:"conditions"` // one per condition of the rule, in its order
 }
 
-// ConditionResult describes how a condition of a rule matches an event.
+// ConditionResult describes how a condition of a rule matches an event. A
+// condition with alternatives has Or instead of Path, Values and Result.
 type ConditionResult struct {
-	Path   string        `json:"path"`
-	Absent bool          `json:"absent,omitempty"` // the event has no value at Path
-	Values []string      `json:"values,omitempty"` // the values of the property
-	Result PatternResult `json:"result"`
+	Path    string        `json:"path,omitempty"`
+	Matched bool          `json:"matched"`          // the condition holds
+	Absent  bool          `json:"absent,omitempty"` // the event has no value at Path
+	Values  []string      `json:"values,omitempty"` // the values of the property
+	Result  PatternResult `json:"result,omitzero"`
+	Or      []Explanation `json:"or,omitempty"` // one per alternative of "$or"
 }
 
 // PatternResult describes how a pattern matches the values of a property.
@@ -49,21 +52,37 @@ func Explain(rule ConditionSet, event []Property) (Explanation, error) {
 	for _, p := range event {
 		values[p.Path] = append(values[p.Path], p.Values...)
 	}
+	return explainSet(rule, values), nil
+}
+
+// explainSet reports how the valid rule matches the values of an event, by
+// path.
+func explainSet(rule ConditionSet, values map[string][]string) Explanation {
 	e := Explanation{Matched: true, Conditions: make([]ConditionResult, len(rule))}
 	for i, c := range rule {
+		r := &e.Conditions[i]
+		if c.Or != nil {
+			r.Or = make([]Explanation, len(c.Or))
+			for j, alternative := range c.Or {
+				r.Or[j] = explainSet(alternative, values)
+				r.Matched = r.Matched || r.Or[j].Matched
+			}
+			e.Matched = e.Matched && r.Matched
+			continue
+		}
 		vs := values[c.Path]
 		folded := make([]string, len(vs))
 		for j, v := range vs {
 			folded[j] = fold(v)
 		}
-		r := explainPattern(c.Pattern, vs, folded)
+		p := explainPattern(c.Pattern, vs, folded)
 		if len(vs) == 0 && c.Pattern.Type != PatternExists {
-			r.Matched = false // only {"exists": false} matches absent properties
+			p.Matched = false // only {"exists": false} matches absent properties
 		}
-		e.Conditions[i] = ConditionResult{Path: c.Path, Absent: len(vs) == 0, Values: vs, Result: r}
+		*r = ConditionResult{Path: c.Path, Matched: p.Matched, Absent: len(vs) == 0, Values: vs, Result: p}
 		e.Matched = e.Matched && r.Matched
 	}
-	return e, nil
+	return e
 }
 
 // ExplainJSON is like Explain, but takes the event as a JSON object, like
@@ -198,26 +217,40 @@ func (e Explanation) String() string {
 	} else {
 		b.WriteString("no match\n")
 	}
-	for _, c := range e.Conditions {
-		fmt.Fprintf(&b, "  %s %s: %s", mark(c.Result.Matched), c.Path, patternText(c.Result.Pattern))
+	writeConditions(&b, e.Conditions, "  ")
+	return b.String()
+}
+
+// writeConditions writes the results of the conditions of one condition set,
+// indented by indent.
+func writeConditions(b *strings.Builder, conditions []ConditionResult, indent string) {
+	for _, c := range conditions {
+		if c.Or != nil {
+			fmt.Fprintf(b, "%s%s any of:\n", indent, mark(c.Matched))
+			for i, alternative := range c.Or {
+				fmt.Fprintf(b, "%s  %s alternative %d\n", indent, mark(alternative.Matched), i+1)
+				writeConditions(b, alternative.Conditions, indent+"    ")
+			}
+			continue
+		}
+		fmt.Fprintf(b, "%s%s %s: %s", indent, mark(c.Matched), c.Path, patternText(c.Result.Pattern))
 		switch {
 		case c.Absent:
 			b.WriteString(" (absent)")
 		case c.Result.Pattern.Type == PatternExists:
 			b.WriteString(" (present)")
-		case c.Result.Pattern.Type == PatternAnythingBut && !c.Result.Matched:
+		case c.Result.Pattern.Type == PatternAnythingBut && !c.Matched:
 			b.WriteString(" excluded by " + quoteAll(c.Result.Values))
-		case c.Result.Matched && c.Result.Sub == nil:
+		case c.Matched && c.Result.Sub == nil:
 			b.WriteString(" matched " + quoteAll(c.Result.Values))
 		default:
-			fmt.Fprintf(&b, " (values %q)", c.Values)
+			fmt.Fprintf(b, " (values %q)", c.Values)
 		}
 		b.WriteByte('\n')
 		if !c.Absent {
-			writeSubResults(&b, c.Result.Sub, "      ")
+			writeSubResults(b, c.Result.Sub, indent+"    ")
 		}
 	}
-	return b.String()
 }
 
 func writeSubResults(b *strings.Builder, results []PatternResult, indent string) {

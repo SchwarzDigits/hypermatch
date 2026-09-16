@@ -12,6 +12,8 @@
 //     anythingBut matches if none of the values matches any sub-pattern
 //   - lt, lte, gt, gte, eq and between compare values as numbers
 //   - exists tests whether the property is present or absent
+//   - $or holds if any of the condition sets in it holds, which is the only
+//     way to combine alternatives on different paths
 //
 // Except for {"exists": false}, a condition never matches a property that
 // is absent from the event.

@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
+- `$or` holds if any of the condition sets in it holds, which combines alternatives on different paths in a single rule. In Go it is the `Or` field of a `Condition`. Rules with `$or` are expanded when they are added, so matching them costs nothing extra.
 - The numeric pattern `eq`, which matches numbers equal to its value in any notation, such as `500`, `500.0` and `5e2`.
 - `ConditionResult.Absent` reports whether the event has no value at the path of a condition.
 - In wildcard patterns, `\*` matches a literal `*` and `\\` a literal `\`.

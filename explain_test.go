@@ -84,10 +84,10 @@ func TestExplanationJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"matched":false,"conditions":[` +
-		`{"path":"owner","absent":true,"result":{"pattern":{"exists":false},"matched":true}},` +
-		`{"path":"severity","values":["info"],"result":{"pattern":{"anyOf":[{"equals":"critical"},{"equals":"warning"}]},"matched":false,` +
+		`{"path":"owner","matched":true,"absent":true,"result":{"pattern":{"exists":false},"matched":true}},` +
+		`{"path":"severity","matched":false,"values":["info"],"result":{"pattern":{"anyOf":[{"equals":"critical"},{"equals":"warning"}]},"matched":false,` +
 		`"sub":[{"pattern":{"equals":"critical"},"matched":false},{"pattern":{"equals":"warning"},"matched":false}]}},` +
-		`{"path":"status","values":["FIRING"],"result":{"pattern":{"equals":"firing"},"matched":true,"values":["FIRING"]}}]}`
+		`{"path":"status","matched":true,"values":["FIRING"],"result":{"pattern":{"equals":"firing"},"matched":true,"values":["FIRING"]}}]}`
 	if string(data) != want {
 		t.Errorf("Marshal =\n%s\nwant\n%s", data, want)
 	}

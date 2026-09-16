@@ -412,6 +412,26 @@ If the attribute value is type of:
 - `{"exists": true}` matches if the event contains the attribute with at least one value, like the wildcard `*`.
 - `{"exists": false}` matches if the event does not contain the attribute, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
 
+### Alternatives with "$or"
+An event matches a rule if **all** of its conditions match. `$or` adds alternatives: the rule also needs any one of the condition sets in it to match. Unlike `anyOf`, which compares the values of a single property, `$or` combines whole conditions, including conditions on different paths:
+
+```javascript
+{
+    "env": {"equals": "prod"},
+    "$or": [
+        {"team": {"equals": "shop"}},
+        {"severity": {"equals": "critical"}, "escalated": {"exists": true}}
+    ]
+}
+```
+
+This rule matches production events that either belong to the shop team or are escalated critical ones.
+
+- A condition set contains at most one `$or`, and `$or` can be nested.
+- In Go, `$or` is the `Or` field of a `Condition`, which holds the alternative condition sets.
+- Rules with `$or` are expanded into their combinations when they are added, so matching them costs nothing extra. A rule that combines into more than 1,024 condition sets is rejected.
+- A key `"$or"` whose value is an object is an ordinary condition on the path `$or`.
+
 ## Rule Identifiers
 
 `HyperMatch[T]` identifies rules by values of any comparable type `T`, such as strings, integers or structs.
@@ -501,13 +521,13 @@ For a user interface, the `Explanation` holds the same information in fields and
 {
   "matched": false,
   "conditions": [
-    {"path": "status", "values": ["FIRING"],
+    {"path": "status", "matched": true, "values": ["FIRING"],
      "result": {"pattern": {"equals": "firing"}, "matched": true, "values": ["FIRING"]}},
-    {"path": "severity", "values": ["info"],
+    {"path": "severity", "matched": false, "values": ["info"],
      "result": {"pattern": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}, "matched": false,
                 "sub": [{"pattern": {"equals": "critical"}, "matched": false},
                         {"pattern": {"equals": "warning"}, "matched": false}]}},
-    {"path": "owner", "absent": true,
+    {"path": "owner", "matched": true, "absent": true,
      "result": {"pattern": {"exists": false}, "matched": true}}
   ]
 }
@@ -517,6 +537,7 @@ For a user interface, the `Explanation` holds the same information in fields and
 - **`values`** on a condition lists the values of the property. On a pattern, it lists the values that matched it, or for `anythingBut` the values that excluded the event.
 - **`absent`** marks properties the event does not contain.
 - **`sub`** holds the results of the sub-patterns of `anyOf`, `allOf` and `anythingBut`.
+- **`or`** holds one explanation per alternative of a `$or` condition, which has no `path` and no `result`.
 
 # Performance
 

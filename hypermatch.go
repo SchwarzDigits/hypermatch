@@ -47,7 +47,7 @@ func New[T comparable]() *HyperMatch[T] {
 // ValidateRule reports whether conditions form a valid rule. The returned
 // error wraps ErrInvalidRule.
 func ValidateRule(conditions ConditionSet) error {
-	_, err := normalizeRule(conditions)
+	_, err := normalizeRule(nil, conditions)
 	return err
 }
 
@@ -62,7 +62,8 @@ func (h *HyperMatch[T]) AddRule(id T, conditions ConditionSet) error {
 	if !isComparable(id) {
 		return fmt.Errorf("%w: identifier of type %T is not comparable", ErrInvalidRule, id)
 	}
-	conds, err := normalizeRule(conditions)
+	var buf [1][]condition
+	sets, err := normalizeRule(buf[:0], conditions)
 	if err != nil {
 		return err
 	}
@@ -76,8 +77,13 @@ func (h *HyperMatch[T]) AddRule(id T, conditions ConditionSet) error {
 			return err
 		}
 	}
-	if s := tab.insert(conds, metaOrder(tab.meta.load(), num)); !known || !s.hasRule(num) {
-		s.addRule(num)
+	// A new rule with a single condition set cannot be in its state yet.
+	fresh := !known && len(sets) == 1
+	key := metaOrder(tab.meta.load(), num)
+	for _, conds := range sets {
+		if s := tab.insert(conds, key); fresh || !s.hasRule(num) {
+			s.addRule(num)
+		}
 	}
 	return nil
 }
@@ -91,7 +97,8 @@ func (h *HyperMatch[T]) ReplaceRule(id T, conditions ConditionSet) error {
 	if !isComparable(id) {
 		return fmt.Errorf("%w: identifier of type %T is not comparable", ErrInvalidRule, id)
 	}
-	conds, err := normalizeRule(conditions)
+	var buf [1][]condition
+	sets, err := normalizeRule(buf[:0], conditions)
 	if err != nil {
 		return err
 	}
@@ -100,12 +107,19 @@ func (h *HyperMatch[T]) ReplaceRule(id T, conditions ConditionSet) error {
 	defer h.mu.Unlock()
 	tab := h.table()
 	old, known := h.nums[id]
+	// The rule gets a number of its own, so a single condition set cannot
+	// be in its state yet.
+	single := len(sets) == 1
 	if !known {
 		num, err := h.newNumber(tab, id)
 		if err != nil {
 			return err
 		}
-		tab.insert(conds, num).addRule(num)
+		for _, conds := range sets {
+			if s := tab.insert(conds, num); single || !s.hasRule(num) {
+				s.addRule(num)
+			}
+		}
 		return nil
 	}
 	n := len(tab.ids.load())
@@ -123,7 +137,11 @@ func (h *HyperMatch[T]) ReplaceRule(id T, conditions ConditionSet) error {
 	// loads the version first, sees exactly one of them.
 	tab.meta.set(num, v, 0, order)
 	tab.ids.add(id)
-	tab.insert(conds, order).addRule(num)
+	for _, conds := range sets {
+		if s := tab.insert(conds, order); single || !s.hasRule(num) {
+			s.addRule(num)
+		}
+	}
 	tab.meta.set(old, from, v, order)
 	tab.version.Store(v)
 

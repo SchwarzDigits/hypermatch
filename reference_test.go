@@ -67,6 +67,16 @@ func (r *refMatcher) match(event []Property) []int {
 // refMatches reports whether event matches the rule cs.
 func refMatches(cs ConditionSet, event []Property) bool {
 	for _, c := range cs {
+		if c.Or != nil {
+			matched := false
+			for _, alternative := range c.Or {
+				matched = matched || refMatches(alternative, event)
+			}
+			if !matched {
+				return false
+			}
+			continue
+		}
 		var values []string
 		for _, p := range event {
 			if p.Path == c.Path {
@@ -342,7 +352,17 @@ func genRule(src source) ConditionSet {
 		}
 		return cs
 	}
-	return genConditions(src)
+	cs := genConditions(src)
+	if src.intn(4) == 0 {
+		// Alternatives, whose conditions never are {"exists": false} and so
+		// never conflict with the conditions beside them.
+		alternatives := make([]ConditionSet, 1+src.intn(2))
+		for i := range alternatives {
+			alternatives[i] = genConditions(src)
+		}
+		cs = append(cs, Condition{Or: alternatives})
+	}
+	return cs
 }
 
 func genConditions(src source) ConditionSet {

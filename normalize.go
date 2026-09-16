@@ -60,19 +60,81 @@ type condition struct {
 	expr *expr
 }
 
-func normalizeRule(cs ConditionSet) ([]condition, error) {
-	if len(cs) == 0 {
-		return nil, fmt.Errorf("%w: no conditions", ErrInvalidRule)
+// maxConditionSets limits how many condition sets the alternatives of a rule
+// may combine into, and maxOrDepth how deeply they may be nested.
+const (
+	maxConditionSets = 1024
+	maxOrDepth       = 32
+)
+
+// normalizeRule appends the normalized condition sets of cs to dst: one for
+// every combination of its alternatives. A rule matches if any of them
+// matches. Rules without alternatives give a single set, which fits into a
+// buffer of the caller and then takes no memory of its own.
+func normalizeRule(dst [][]condition, cs ConditionSet) ([][]condition, error) {
+	sets, err := normalizeSets(dst, cs, 0)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRule, err)
 	}
+	return sets, nil
+}
+
+func normalizeSets(dst [][]condition, cs ConditionSet, depth int) ([][]condition, error) {
+	if len(cs) == 0 {
+		return nil, errors.New("no conditions")
+	}
+	// Almost every rule has no alternatives, and is normalized as it is.
+	or := -1
+	for i := range cs {
+		if cs[i].Or == nil {
+			continue
+		}
+		if or >= 0 {
+			return nil, fmt.Errorf("%q must not appear twice in a condition set; nest them instead", orKey)
+		}
+		or = i
+	}
+	if or < 0 {
+		conds, err := normalizeConditions(cs)
+		if err != nil {
+			return nil, err
+		}
+		return append(dst, conds), nil
+	}
+	c := &cs[or]
+	switch {
+	case len(c.Or) == 0:
+		return nil, fmt.Errorf("%q must contain condition sets", orKey)
+	case c.Path != "" || c.Pattern.Type != PatternEquals || c.Pattern.Value != "" || c.Pattern.Sub != nil:
+		return nil, fmt.Errorf("%q must not have a path or a pattern", orKey)
+	case depth >= maxOrDepth:
+		return nil, fmt.Errorf("%q is nested more than %d levels deep", orKey, maxOrDepth)
+	}
+	plain := slices.Delete(slices.Clone(cs), or, or+1)
+	for i, alternative := range c.Or {
+		// Every alternative holds together with the conditions beside it.
+		var err error
+		if dst, err = normalizeSets(dst, append(slices.Clip(alternative), plain...), depth+1); err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", orKey, i, err)
+		}
+		if len(dst) > maxConditionSets {
+			return nil, fmt.Errorf("%q combines into more than %d condition sets", orKey, maxConditionSets)
+		}
+	}
+	return dst, nil
+}
+
+// normalizeConditions normalizes a condition set without alternatives.
+func normalizeConditions(cs ConditionSet) ([]condition, error) {
 	conds := make([]condition, len(cs))
 	for i := range cs {
 		c := &cs[i]
 		if c.Path == "" {
-			return nil, fmt.Errorf("%w: condition %d: empty path", ErrInvalidRule, i)
+			return nil, fmt.Errorf("condition %d: empty path", i)
 		}
 		e, err := normalizePattern(&c.Pattern)
 		if err != nil {
-			return nil, fmt.Errorf("%w: condition %q: %w", ErrInvalidRule, c.Path, err)
+			return nil, fmt.Errorf("condition %q: %w", c.Path, err)
 		}
 		conds[i] = condition{path: c.Path, expr: e}
 	}
