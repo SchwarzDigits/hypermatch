@@ -154,6 +154,7 @@ type numIndex struct {
 	lower  numList // bounded below only, sorted by lo
 	upper  numList // bounded above only, sorted by hi
 	ranges numList // bounded on both sides, sorted by lo
+	points numList // single numbers, sorted by lo
 }
 
 type numEntry struct {
@@ -166,6 +167,7 @@ type numEntry struct {
 type numList struct {
 	sorted []numEntry
 	recent []numEntry
+	maxHi  []float64 // ranges only: maxHi[i] is the largest hi in sorted[:i+1]
 }
 
 const maxRecent = 64
@@ -178,20 +180,22 @@ func (n *numIndex) with(iv numInterval, l *leaf) *numIndex {
 	c := *n
 	e := numEntry{iv: iv, leaf: l}
 	switch {
+	case iv.lo == iv.hi:
+		c.points = c.points.with(e, lowerBound, false)
 	case math.IsInf(iv.hi, 1):
-		c.lower = c.lower.with(e, lowerBound)
+		c.lower = c.lower.with(e, lowerBound, false)
 	case math.IsInf(iv.lo, -1):
-		c.upper = c.upper.with(e, upperBound)
+		c.upper = c.upper.with(e, upperBound, false)
 	default:
-		c.ranges = c.ranges.with(e, lowerBound)
+		c.ranges = c.ranges.with(e, lowerBound, true)
 	}
 	return &c
 }
 
-func (l numList) with(e numEntry, bound func(numInterval) float64) numList {
+func (l numList) with(e numEntry, bound func(numInterval) float64, withMaxHi bool) numList {
 	recent := append(slices.Clip(l.recent), e)
 	if len(recent) < maxRecent {
-		return numList{sorted: l.sorted, recent: recent}
+		return numList{sorted: l.sorted, recent: recent, maxHi: l.maxHi}
 	}
 	byBound := func(a, b numEntry) int { return cmp.Compare(bound(a.iv), bound(b.iv)) }
 	slices.SortFunc(recent, byBound)
@@ -207,10 +211,21 @@ func (l numList) with(e numEntry, bound func(numInterval) float64) numList {
 		}
 	}
 	merged = append(append(merged, l.sorted[i:]...), recent[j:]...)
-	return numList{sorted: merged}
+	m := numList{sorted: merged}
+	if withMaxHi {
+		m.maxHi = make([]float64, len(merged))
+		hi := math.Inf(-1)
+		for i := range merged {
+			hi = max(hi, merged[i].iv.hi)
+			m.maxHi[i] = hi
+		}
+	}
+	return m
 }
 
-// collect appends the leaves whose intervals contain x to hits.
+// collect appends the leaves whose intervals contain x to hits. Except for
+// the recent entries, it only looks at entries that contain x and at most
+// one more per list, unless ranges overlap.
 func (n *numIndex) collect(x float64, hits []*leaf) []*leaf {
 	for i := range n.lower.sorted {
 		e := &n.lower.sorted[i]
@@ -230,16 +245,19 @@ func (n *numIndex) collect(x float64, hits []*leaf) []*leaf {
 			hits = append(hits, e.leaf)
 		}
 	}
-	for i := range n.ranges.sorted {
-		e := &n.ranges.sorted[i]
-		if e.iv.lo > x {
-			break
-		}
-		if e.iv.contains(x) {
-			hits = append(hits, e.leaf)
+	// The ranges starting at or below x are a prefix of the sorted ones.
+	// Scanning it backwards can stop once no earlier range reaches x.
+	rs := n.ranges.sorted
+	for i := searchLo(rs, x, true) - 1; i >= 0 && n.ranges.maxHi[i] >= x; i-- {
+		if rs[i].iv.contains(x) {
+			hits = append(hits, rs[i].leaf)
 		}
 	}
-	for _, recent := range [...][]numEntry{n.lower.recent, n.upper.recent, n.ranges.recent} {
+	ps := n.points.sorted
+	for i := searchLo(ps, x, false); i < len(ps) && ps[i].iv.lo == x; i++ {
+		hits = append(hits, ps[i].leaf)
+	}
+	for _, recent := range [...][]numEntry{n.lower.recent, n.upper.recent, n.ranges.recent, n.points.recent} {
 		for i := range recent {
 			if recent[i].iv.contains(x) {
 				hits = append(hits, recent[i].leaf)
@@ -247,4 +265,19 @@ func (n *numIndex) collect(x float64, hits []*leaf) []*leaf {
 		}
 	}
 	return hits
+}
+
+// searchLo returns the number of entries in s, which is sorted by lo, whose
+// lo is less than x, or less than or equal to x if orEqual is true.
+func searchLo(s []numEntry, x float64, orEqual bool) int {
+	i, j := 0, len(s)
+	for i < j {
+		m := int(uint(i+j) >> 1)
+		if lo := s[m].iv.lo; lo < x || (orEqual && lo == x) {
+			i = m + 1
+		} else {
+			j = m
+		}
+	}
+	return i
 }

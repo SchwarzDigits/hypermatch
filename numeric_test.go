@@ -15,6 +15,7 @@ func ltP(v string) Pattern  { return Pattern{Type: PatternLessThan, Value: v} }
 func lteP(v string) Pattern { return Pattern{Type: PatternLessThanOrEqual, Value: v} }
 func gtP(v string) Pattern  { return Pattern{Type: PatternGreaterThan, Value: v} }
 func gteP(v string) Pattern { return Pattern{Type: PatternGreaterThanOrEqual, Value: v} }
+func eqP(v string) Pattern  { return Pattern{Type: PatternNumericEquals, Value: v} }
 
 func betweenP(lower, upper Pattern) Pattern {
 	return Pattern{Type: PatternBetween, Sub: []Pattern{lower, upper}}
@@ -84,6 +85,13 @@ func TestNumericAndExistsSemantics(t *testing.T) {
 		{"allOf of comparisons may use several values", ConditionSet{cond("v", allOfP(gtP("10"), ltP("20")))}, []Property{prop("v", "5", "25")}, true},
 		{"anythingBut with a comparison", ConditionSet{cond("v", anythingButP(gtP("5")))}, []Property{prop("v", "1", "2")}, true},
 		{"anythingBut with a comparison fails", ConditionSet{cond("v", anythingButP(gtP("5")))}, []Property{prop("v", "1", "9")}, false},
+		{"eq", ConditionSet{cond("v", eqP("500"))}, []Property{prop("v", "500")}, true},
+		{"eq in any notation", ConditionSet{cond("v", eqP("500"))}, []Property{prop("v", "5E2", "x")}, true},
+		{"eq with decimals", ConditionSet{cond("v", eqP("2.50"))}, []Property{prop("v", "2.5")}, true},
+		{"eq with negative zero", ConditionSet{cond("v", eqP("0"))}, []Property{prop("v", "-0.0")}, true},
+		{"eq with another number", ConditionSet{cond("v", eqP("500"))}, []Property{prop("v", "500.1")}, false},
+		{"eq with text", ConditionSet{cond("v", eqP("500"))}, []Property{prop("v", "500 ms")}, false},
+		{"anythingBut with eq", ConditionSet{cond("v", anythingButP(eqP("0")))}, []Property{prop("v", "0.0")}, false},
 		{"exists true", ConditionSet{cond("v", existsP(true))}, []Property{prop("v", "")}, true},
 		{"exists true needs the property", ConditionSet{cond("v", existsP(true))}, []Property{prop("w", "x")}, false},
 		{"exists false", ConditionSet{cond("v", existsP(false))}, []Property{prop("w", "x")}, true},
@@ -131,22 +139,29 @@ func TestNumericAndExistsJSONEvents(t *testing.T) {
 }
 
 // TestNumericIndexManyBounds uses enough distinct bounds to merge the sorted
-// lists of the numeric index several times.
+// lists of the numeric index several times, with ranges that overlap many
+// others.
 func TestNumericIndexManyBounds(t *testing.T) {
 	h := New[int]()
 	ref := &refMatcher{}
-	add := func(id int, p Pattern) {
+	id := 0
+	add := func(p Pattern) {
 		cs := ConditionSet{cond("v", p)}
 		mustAdd(t, h, id, cs...)
 		ref.add(id, cs)
+		id++
 	}
 	types := []PatternType{PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual}
 	for i := range 500 {
 		v := strconv.Itoa(i)
-		add(2*i, Pattern{Type: types[i%4], Value: v})
-		add(2*i+1, betweenP(gteP(v), ltP(strconv.Itoa(i+7))))
+		add(Pattern{Type: types[i%4], Value: v})
+		add(betweenP(gteP(v), ltP(strconv.Itoa(i+7))))
+		add(eqP(strconv.Itoa(i * 3)))
+		if i%50 == 0 {
+			add(betweenP(gtP(v), lteP(strconv.Itoa(i+1000))))
+		}
 	}
-	for _, x := range []string{"-1", "0", "0.5", "3", "249", "250", "251", "499", "500", "1e9", "abc"} {
+	for _, x := range []string{"-1", "0", "-0", "0.5", "3", "249", "250", "251", "499", "500", "1e9", "abc", "1200", "1497", "1450"} {
 		event := []Property{prop("v", x)}
 		if got, want := h.Match(event), ref.match(event); !slices.Equal(got, want) {
 			t.Errorf("Match(%s) = %d matches, want %d", x, len(got), len(want))
@@ -163,6 +178,8 @@ func TestNumericAndExistsValidation(t *testing.T) {
 		{"not a number", ConditionSet{cond("v", gtP("abc"))}, "[gt] must contain a finite number"},
 		{"no bound", ConditionSet{cond("v", ltP(""))}, "[lt] must contain a finite number"},
 		{"infinite bound", ConditionSet{cond("v", gteP("1e400"))}, "[gte] must contain a finite number"},
+		{"eq with text", ConditionSet{cond("v", eqP("five"))}, "[eq] must contain a finite number"},
+		{"eq in between", ConditionSet{cond("v", betweenP(eqP("1"), ltP("2")))}, "between[0]: must be lt, lte, gt or gte"},
 		{"comparison with sub-patterns", ConditionSet{cond("v", Pattern{Type: PatternLessThanOrEqual, Value: "1", Sub: []Pattern{equalsP("a")}})}, "[lte] must not contain sub-patterns"},
 		{"between with a value", ConditionSet{cond("v", Pattern{Type: PatternBetween, Value: "1"})}, "[between] must not contain a value"},
 		{"between with one bound", ConditionSet{cond("v", Pattern{Type: PatternBetween, Sub: []Pattern{gtP("1")}})}, "must contain a lower (gt, gte) and an upper (lt, lte) bound"},
@@ -191,6 +208,7 @@ func TestNumericAndExistsPatternJSON(t *testing.T) {
 		"latency": {"gt": 500},
 		"code": {"between": [{"gte": "200"}, {"lt": 300}]},
 		"owner": {"exists": false},
+		"size": {"eq": 1.5},
 		"team": {"exists": "true"}
 	}`), &rule)
 	if err != nil {
@@ -200,6 +218,7 @@ func TestNumericAndExistsPatternJSON(t *testing.T) {
 		cond("code", betweenP(gteP("200"), ltP("300"))),
 		cond("latency", gtP("500")),
 		cond("owner", existsP(false)),
+		cond("size", eqP("1.5")),
 		cond("team", existsP(true)),
 	}
 	if !reflect.DeepEqual(rule, want) {
@@ -209,7 +228,7 @@ func TestNumericAndExistsPatternJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"code":{"between":[{"gte":200},{"lt":300}]},"latency":{"gt":500},"owner":{"exists":false},"team":{"exists":true}}`; string(data) != want {
+	if want := `{"code":{"between":[{"gte":200},{"lt":300}]},"latency":{"gt":500},"owner":{"exists":false},"size":{"eq":1.5},"team":{"exists":true}}`; string(data) != want {
 		t.Errorf("Marshal = %s, want %s", data, want)
 	}
 	for p, want := range map[*Pattern]string{

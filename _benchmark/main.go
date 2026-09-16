@@ -55,8 +55,8 @@ func main() {
 	// behind by one candidate cannot slow down the next one. Quamina's rules
 	// are measured with and without the wildcard condition, because many
 	// shellstyle patterns slow it down considerably.
-	fmt.Println("| Rules | Candidate | Adding 100,000 rules | Events per second | Matches per event |")
-	fmt.Println("|---|---|---:|---:|---:|")
+	fmt.Println("| Rules | Candidate | Adding 100,000 rules | Events per second | Matches per event | Memory per rule |")
+	fmt.Println("|---|---|---:|---:|---:|---:|")
 	for _, wc := range []bool{true, false} {
 		for _, name := range candidateNames {
 			cmd := exec.Command(os.Args[0], "-candidate", name, "-wildcard="+strconv.FormatBool(wc))
@@ -75,6 +75,7 @@ func measure(c Candidate, wildcard bool) {
 		scenario = "with wildcard"
 	}
 	log.Printf("---Starting with %s, %s\n", c.Name(), scenario)
+	beforeHeap := heapAlloc()
 	beforeAddingRules := time.Now()
 	for i := 0; i < numberOfRules; i++ {
 		c.AddRule(i, numberOfRules/10)
@@ -82,10 +83,23 @@ func measure(c Candidate, wildcard bool) {
 	adding := time.Since(beforeAddingRules)
 	log.Printf("adding %d rules took %.5fs\n", numberOfRules, adding.Seconds())
 
-	runtime.GC() // measure the steady state, not the garbage of adding rules
+	// The heap of the rules, before matching leaves garbage behind. This also
+	// collects the garbage of adding them, so the events are matched in the
+	// steady state.
+	perRule := (int64(heapAlloc()) - int64(beforeHeap)) / numberOfRules
+	log.Printf("the rules take %d bytes each\n", perRule)
+
 	events, matches, elapsed := runEvents(c)
-	fmt.Printf("| %s | %s | %.2f s | %s | %.0f |\n", scenario, c.Name(), adding.Seconds(),
-		thousands(int64(float64(events)/elapsed.Seconds())), float64(matches)/float64(events))
+	fmt.Printf("| %s | %s | %.2f s | %s | %.0f | %d |\n", scenario, c.Name(), adding.Seconds(),
+		thousands(int64(float64(events)/elapsed.Seconds())), float64(matches)/float64(events), perRule)
+}
+
+// heapAlloc returns the live heap after a full garbage collection.
+func heapAlloc() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
 }
 
 func runEvents(c Candidate) (events, matches int, elapsed time.Duration) {

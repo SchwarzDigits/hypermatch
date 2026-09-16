@@ -10,8 +10,10 @@
 //     matches if any of its values does
 //   - anyOf, allOf and anythingBut combine patterns on the same path;
 //     anythingBut matches if none of the values matches any sub-pattern
-//   - lt, lte, gt, gte and between compare values as numbers
+//   - lt, lte, gt, gte, eq and between compare values as numbers
 //   - exists tests whether the property is present or absent
+//   - $or holds if any of the condition sets in it holds, which is the only
+//     way to combine alternatives on different paths
 //
 // Except for {"exists": false}, a condition never matches a property that
 // is absent from the event.
@@ -22,8 +24,9 @@
 // [HyperMatch] is safe for concurrent use, and Match is lock-free. Rules can
 // be added, replaced and removed at any time with [HyperMatch.AddRule],
 // [HyperMatch.ReplaceRule] and [HyperMatch.RemoveRule].
-// [HyperMatch.MatchFirst] returns only the rule with the highest priority,
-// which is the one added first.
+// [HyperMatch.MatchFirst] returns only the first matching rule, the one
+// added earliest, which routes an event if rules are added in the order
+// they should win.
 //
 // Events that arrive as JSON can be matched directly with
 // [HyperMatch.MatchJSON], which decodes only the values rules refer to.

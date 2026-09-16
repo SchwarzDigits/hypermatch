@@ -67,6 +67,16 @@ func (r *refMatcher) match(event []Property) []int {
 // refMatches reports whether event matches the rule cs.
 func refMatches(cs ConditionSet, event []Property) bool {
 	for _, c := range cs {
+		if c.Or != nil {
+			matched := false
+			for _, alternative := range c.Or {
+				matched = matched || refMatches(alternative, event)
+			}
+			if !matched {
+				return false
+			}
+			continue
+		}
 		var values []string
 		for _, p := range event {
 			if p.Path == c.Path {
@@ -117,6 +127,8 @@ func refInRange(p Pattern, x float64) bool {
 		return x <= bound
 	case PatternGreaterThan:
 		return x > bound
+	case PatternNumericEquals:
+		return x == bound
 	}
 	return x >= bound
 }
@@ -143,7 +155,7 @@ func refSatisfies(p Pattern, values []string) bool {
 		return !refSatisfies(Pattern{Type: PatternAnyOf, Sub: p.Sub}, values)
 	case PatternExists:
 		return true // only "true" gets here, and the property is present
-	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternBetween:
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternBetween, PatternNumericEquals:
 		for _, v := range values {
 			if x, ok := refNumber(v); ok && refInRange(p, x) {
 				return true
@@ -172,20 +184,25 @@ func refSatisfies(p Pattern, values []string) bool {
 }
 
 // refGlob reports whether s matches pattern, in which '*' matches any
-// sequence of bytes.
+// sequence of bytes and a backslash makes the next byte literal.
 func refGlob(pattern, s string) bool {
 	// dp[j] reports whether the pattern read so far matches s[:j].
 	dp := make([]bool, len(s)+1)
 	dp[0] = true
 	for i := 0; i < len(pattern); i++ {
-		if pattern[i] == '*' {
+		c := pattern[i]
+		if c == '*' {
 			for j := 1; j <= len(s); j++ {
 				dp[j] = dp[j] || dp[j-1]
 			}
 			continue
 		}
+		if c == '\\' {
+			i++
+			c = pattern[i]
+		}
 		for j := len(s); j >= 1; j-- {
-			dp[j] = dp[j-1] && s[j-1] == pattern[i]
+			dp[j] = dp[j-1] && s[j-1] == c
 		}
 		dp[0] = false
 	}
@@ -217,9 +234,9 @@ var (
 	// because paths are case-sensitive.
 	genPaths = []string{"a", "b", "c", "A"}
 	// genRunes contains upper case, non-ASCII, the Kelvin sign (which
-	// folds to the one-byte "k"), invalid UTF-8 and, as last element, "*",
-	// which is literal in values and in non-wildcard patterns.
-	genRunes = []string{"a", "b", "A", "-", "ä", "Ä", "K", "k", "\xff", "*"}
+	// folds to the one-byte "k"), invalid UTF-8, and `\` and "*", which are
+	// literal in values and in non-wildcard patterns.
+	genRunes = []string{"a", "b", "A", "-", "ä", "Ä", "K", "k", "\xff", `\`, "*"}
 )
 
 func genString(src source, maxLen int) string {
@@ -246,7 +263,11 @@ func genWildcard(src source) string {
 			star = true
 			continue
 		}
-		b.WriteString(genRunes[src.intn(len(genRunes)-1)])
+		r := genRunes[src.intn(len(genRunes))]
+		if r == `\` || r == "*" {
+			b.WriteByte('\\') // a literal, which must be escaped
+		}
+		b.WriteString(r)
 		star = false
 	}
 	return b.String()
@@ -283,7 +304,7 @@ func genPattern(src source, depth int) Pattern {
 	case 3:
 		return wildcardP(genWildcard(src))
 	case 4:
-		types := [...]PatternType{PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual}
+		types := [...]PatternType{PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternNumericEquals}
 		return Pattern{Type: types[src.intn(len(types))], Value: genBounds[src.intn(len(genBounds))]}
 	case 5:
 		return genBetween(src)
@@ -331,7 +352,17 @@ func genRule(src source) ConditionSet {
 		}
 		return cs
 	}
-	return genConditions(src)
+	cs := genConditions(src)
+	if src.intn(4) == 0 {
+		// Alternatives, whose conditions never are {"exists": false} and so
+		// never conflict with the conditions beside them.
+		alternatives := make([]ConditionSet, 1+src.intn(2))
+		for i := range alternatives {
+			alternatives[i] = genConditions(src)
+		}
+		cs = append(cs, Condition{Or: alternatives})
+	}
+	return cs
 }
 
 func genConditions(src source) ConditionSet {

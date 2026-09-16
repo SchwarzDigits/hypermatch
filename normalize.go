@@ -60,19 +60,81 @@ type condition struct {
 	expr *expr
 }
 
-func normalizeRule(cs ConditionSet) ([]condition, error) {
-	if len(cs) == 0 {
-		return nil, fmt.Errorf("%w: no conditions", ErrInvalidRule)
+// maxConditionSets limits how many condition sets the alternatives of a rule
+// may combine into, and maxOrDepth how deeply they may be nested.
+const (
+	maxConditionSets = 1024
+	maxOrDepth       = 32
+)
+
+// normalizeRule appends the normalized condition sets of cs to dst: one for
+// every combination of its alternatives. A rule matches if any of them
+// matches. Rules without alternatives give a single set, which fits into a
+// buffer of the caller and then takes no memory of its own.
+func normalizeRule(dst [][]condition, cs ConditionSet) ([][]condition, error) {
+	sets, err := normalizeSets(dst, cs, 0)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRule, err)
 	}
+	return sets, nil
+}
+
+func normalizeSets(dst [][]condition, cs ConditionSet, depth int) ([][]condition, error) {
+	if len(cs) == 0 {
+		return nil, errors.New("no conditions")
+	}
+	// Almost every rule has no alternatives, and is normalized as it is.
+	or := -1
+	for i := range cs {
+		if cs[i].Or == nil {
+			continue
+		}
+		if or >= 0 {
+			return nil, fmt.Errorf("%q must not appear twice in a condition set; nest them instead", orKey)
+		}
+		or = i
+	}
+	if or < 0 {
+		conds, err := normalizeConditions(cs)
+		if err != nil {
+			return nil, err
+		}
+		return append(dst, conds), nil
+	}
+	c := &cs[or]
+	switch {
+	case len(c.Or) == 0:
+		return nil, fmt.Errorf("%q must contain condition sets", orKey)
+	case c.Path != "" || c.Pattern.Type != PatternEquals || c.Pattern.Value != "" || c.Pattern.Sub != nil:
+		return nil, fmt.Errorf("%q must not have a path or a pattern", orKey)
+	case depth >= maxOrDepth:
+		return nil, fmt.Errorf("%q is nested more than %d levels deep", orKey, maxOrDepth)
+	}
+	plain := slices.Delete(slices.Clone(cs), or, or+1)
+	for i, alternative := range c.Or {
+		// Every alternative holds together with the conditions beside it.
+		var err error
+		if dst, err = normalizeSets(dst, append(slices.Clip(alternative), plain...), depth+1); err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", orKey, i, err)
+		}
+		if len(dst) > maxConditionSets {
+			return nil, fmt.Errorf("%q combines into more than %d condition sets", orKey, maxConditionSets)
+		}
+	}
+	return dst, nil
+}
+
+// normalizeConditions normalizes a condition set without alternatives.
+func normalizeConditions(cs ConditionSet) ([]condition, error) {
 	conds := make([]condition, len(cs))
 	for i := range cs {
 		c := &cs[i]
 		if c.Path == "" {
-			return nil, fmt.Errorf("%w: condition %d: empty path", ErrInvalidRule, i)
+			return nil, fmt.Errorf("condition %d: empty path", i)
 		}
 		e, err := normalizePattern(&c.Pattern)
 		if err != nil {
-			return nil, fmt.Errorf("%w: condition %q: %w", ErrInvalidRule, c.Path, err)
+			return nil, fmt.Errorf("condition %q: %w", c.Path, err)
 		}
 		conds[i] = condition{path: c.Path, expr: e}
 	}
@@ -120,11 +182,18 @@ func normalizePattern(p *Pattern) (*expr, error) {
 		case PatternSuffix:
 			return newLeaf(leafSuffix, v), nil
 		}
-		if strings.Contains(v, "**") {
-			return nil, fmt.Errorf("[%s] must not contain two consecutive wildcards", p.Type)
+		if strings.IndexByte(v, '\\') < 0 {
+			if strings.Contains(v, "**") {
+				return nil, fmt.Errorf("[%s] must not contain two consecutive wildcards", p.Type)
+			}
+			return plainWildcardLeaf(v), nil
 		}
-		return wildcardLeaf(v), nil
-	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual:
+		parts, err := splitWildcard(v)
+		if err != nil {
+			return nil, fmt.Errorf("[%s] %w", p.Type, err)
+		}
+		return wildcardLeaf(v, parts), nil
+	case PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual, PatternNumericEquals:
 		v, err := numericBound(p)
 		if err != nil {
 			return nil, err
@@ -197,6 +266,8 @@ func boundInterval(t PatternType, v float64) numInterval {
 		return numInterval{lo: math.Inf(-1), hi: v}
 	case PatternGreaterThan:
 		return numInterval{lo: v, hi: math.Inf(1), loOpen: true}
+	case PatternNumericEquals:
+		return numInterval{lo: v, hi: v}
 	}
 	return numInterval{lo: v, hi: math.Inf(1)}
 }
@@ -243,9 +314,47 @@ func betweenInterval(p *Pattern) (numInterval, error) {
 	return iv, nil
 }
 
-// wildcardLeaf returns the cheapest leaf equivalent to the folded wildcard
-// pattern v.
-func wildcardLeaf(v string) *expr {
+// splitWildcard returns the literal parts of the wildcard pattern v between
+// its wildcards, with escapes resolved: `a*b\*c` has the parts "a" and
+// "b*c", and a pattern without wildcards has a single part.
+func splitWildcard(v string) ([]string, error) {
+	if strings.IndexByte(v, '\\') < 0 {
+		// The parts are pieces of v, so nothing is copied.
+		parts := strings.Split(v, "*")
+		if len(parts) > 2 && slices.Contains(parts[1:len(parts)-1], "") {
+			return nil, errors.New("must not contain two consecutive wildcards")
+		}
+		return parts, nil
+	}
+	parts := make([]string, 0, 2)
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch c {
+		case '*':
+			parts = append(parts, b.String())
+			b.Reset()
+			continue
+		case '\\':
+			if i+1 == len(v) || (v[i+1] != '*' && v[i+1] != '\\') {
+				return nil, errors.New(`contains an invalid escape: use \* for a literal * and \\ for a literal \`)
+			}
+			i++
+			c = v[i]
+		}
+		b.WriteByte(c)
+	}
+	parts = append(parts, b.String())
+	if len(parts) > 2 && slices.Contains(parts[1:len(parts)-1], "") {
+		return nil, errors.New("must not contain two consecutive wildcards")
+	}
+	return parts, nil
+}
+
+// plainWildcardLeaf returns the cheapest leaf equivalent to the folded
+// wildcard pattern v, which contains no escapes. It takes no memory, unlike
+// splitting the pattern, and almost all patterns take this way.
+func plainWildcardLeaf(v string) *expr {
 	if v == "*" {
 		return newLeaf(leafExists, "")
 	}
@@ -260,6 +369,25 @@ func wildcardLeaf(v string) *expr {
 		return newLeaf(leafPrefix, core)
 	case !trail:
 		return newLeaf(leafSuffix, core)
+	}
+	return newLeaf(leafGlob, v)
+}
+
+// wildcardLeaf returns the cheapest leaf equivalent to the folded wildcard
+// pattern v, whose literal parts are parts.
+func wildcardLeaf(v string, parts []string) *expr {
+	first, last := parts[0], parts[len(parts)-1]
+	switch {
+	case len(parts) == 1:
+		return newLeaf(leafEquals, first)
+	case len(parts) > 2:
+		return newLeaf(leafGlob, v)
+	case first == "" && last == "":
+		return newLeaf(leafExists, "")
+	case first == "":
+		return newLeaf(leafSuffix, last)
+	case last == "":
+		return newLeaf(leafPrefix, first)
 	}
 	return newLeaf(leafGlob, v)
 }

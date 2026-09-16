@@ -3,7 +3,6 @@ package hypermatch
 import (
 	"hash/maphash"
 	"slices"
-	"strings"
 	"sync/atomic"
 )
 
@@ -145,11 +144,18 @@ type globAccept struct {
 	reach list[*leaf] // patterns ending here with a trailing '*'
 }
 
-// insert adds the folded wildcard pattern for leaf l. Writer only.
+// insert adds the valid, folded wildcard pattern for leaf l. It walks the
+// pattern rather than splitting it, which takes no memory. Writer only.
 func (n *globNode) insert(pattern string, l *leaf) {
-	body, trailing := strings.CutSuffix(pattern, "*")
-	for i := 0; i < len(body); i++ {
-		if body[i] == '*' {
+	trailing := false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		switch c {
+		case '*':
+			if i == len(pattern)-1 {
+				trailing = true
+				continue
+			}
 			s := n.spin.Load()
 			if s == nil {
 				s = &globNode{spinner: true}
@@ -157,11 +163,14 @@ func (n *globNode) insert(pattern string, l *leaf) {
 			}
 			n = s
 			continue
+		case '\\': // escapes the next byte
+			i++
+			c = pattern[i]
 		}
-		k, ok := n.kids.get(body[i])
+		k, ok := n.kids.get(c)
 		if !ok {
 			k = new(globNode)
-			n.kids.put(body[i], k)
+			n.kids.put(c, k)
 		}
 		n = k
 	}
