@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+- Functions that build rules in Go with less typing: `Cond`, `Or`, `Equals`, `Prefix`, `Suffix`, `Wildcard`, `AnyOf`, `AllOf`, `AnythingBut`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `NumericEquals`, `Between`, `Exists` and `Absent`.
+- Runnable examples for alternatives with `$or` and for numeric patterns.
+
 ### Changed
 - Conditions are evaluated against a set of the leaves that matched, instead of searching a sorted list of them. Rule sets with many different `anythingBut` conditions on the same path match up to about twice as fast, and the set is only built for conditions that need it.
 

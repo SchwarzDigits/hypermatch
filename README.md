@@ -55,7 +55,7 @@ hypermatch requires Go 1.24 or later.
 
 ```go
 import (
-    "log"
+    "fmt"
 
     "github.com/SchwarzDigits/hypermatch/v2"
 )
@@ -64,29 +64,29 @@ func main() {
     // Rules are identified by values of any comparable type, here strings.
     hm := hypermatch.New[string]()
 
-    // Add a rule
-    if err := hm.AddRule("markus_rule", hypermatch.ConditionSet{
-        {Path: "firstname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "markus"}},
-        {Path: "lastname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "troßbach"}},
-    }); err != nil {
+    // An event matches a rule if it matches all of its conditions.
+    err := hm.AddRule("page-shop-team", hypermatch.ConditionSet{
+        hypermatch.Cond("team", hypermatch.Equals("shop")),
+        hypermatch.Cond("severity", hypermatch.AnyOf(hypermatch.Equals("critical"), hypermatch.Equals("warning"))),
+        hypermatch.Cond("latency_ms", hypermatch.GreaterThan(500)),
+    })
+    if err != nil {
         panic(err)
     }
 
-    // Test with match
-    matchedRules := hm.Match([]hypermatch.Property{
-        {Path: "firstname", Values: []string{"markus"}},
-        {Path: "lastname", Values: []string{"troßbach"}},
-    })
-    log.Printf("Following rules match: %v", matchedRules) // [markus_rule]
+    // Match events given as Go values...
+    fmt.Println(hm.Match([]hypermatch.Property{
+        {Path: "team", Values: []string{"shop"}},
+        {Path: "severity", Values: []string{"CRITICAL"}},
+        {Path: "latency_ms", Values: []string{"750"}},
+    })) // [page-shop-team]
 
-    // Test without match
-    matchedRules = hm.Match([]hypermatch.Property{
-        {Path: "firstname", Values: []string{"john"}},
-        {Path: "lastname", Values: []string{"doe"}},
-    })
-    log.Printf("Following rules match: %v", matchedRules) // []
+    // ...or as JSON.
+    fmt.Println(hm.MatchJSON([]byte(`{"team": "search", "severity": "critical", "latency_ms": 750}`))) // [] <nil>
 }
 ```
+
+`Cond`, `Equals`, `AnyOf` and their siblings only fill in the structs, so `hypermatch.Cond("team", hypermatch.Equals("shop"))` is the same as `hypermatch.Condition{Path: "team", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "shop"}}`. Rules can also be written as JSON, see [Matching Basics](#matching-basics).
 
 # Use Cases
 
@@ -167,36 +167,11 @@ These rules hold for every condition:
 Here’s an example rule that matches the event above:
 
 ```go
-ConditionSet{
-    {
-        Path: "status",
-        Pattern: Pattern{Type: PatternEquals, Value: "firing"},
-    },
-    {
-        Path: "name",
-        Pattern: Pattern{Type: PatternAnythingBut, Sub: []Pattern{
-                {Type: PatternWildcard, Value: "TEST*"},
-            },
-        },
-    },
-    {
-        Path: "severity",
-        Pattern: Pattern{ Type: PatternAnyOf,
-            Sub: []Pattern{
-                {Type: PatternEquals, Value: "critical"},
-                {Type: PatternEquals, Value: "warning"},
-            },
-        },
-    },
-    {
-        Path: "tags",
-        Pattern: Pattern{ Type: PatternAllOf,
-            Sub: []Pattern{
-                {Type: PatternEquals, Value: "shop"},
-                {Type: PatternEquals, Value: "backend"},
-            },
-        },
-    },
+hypermatch.ConditionSet{
+    hypermatch.Cond("status", hypermatch.Equals("firing")),
+    hypermatch.Cond("name", hypermatch.AnythingBut(hypermatch.Wildcard("TEST*"))),
+    hypermatch.Cond("severity", hypermatch.AnyOf(hypermatch.Equals("critical"), hypermatch.Equals("warning"))),
+    hypermatch.Cond("tags", hypermatch.AllOf(hypermatch.Equals("shop"), hypermatch.Equals("backend"))),
 }
 ```
 

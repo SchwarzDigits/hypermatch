@@ -12,15 +12,9 @@ func Example() {
 	hm := hypermatch.New[string]()
 
 	err := hm.AddRule("critical-shop-alerts", hypermatch.ConditionSet{
-		{Path: "status", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "firing"}},
-		{Path: "severity", Pattern: hypermatch.Pattern{Type: hypermatch.PatternAnyOf, Sub: []hypermatch.Pattern{
-			{Type: hypermatch.PatternEquals, Value: "critical"},
-			{Type: hypermatch.PatternEquals, Value: "warning"},
-		}}},
-		{Path: "tags", Pattern: hypermatch.Pattern{Type: hypermatch.PatternAllOf, Sub: []hypermatch.Pattern{
-			{Type: hypermatch.PatternEquals, Value: "shop"},
-			{Type: hypermatch.PatternEquals, Value: "backend"},
-		}}},
+		hypermatch.Cond("status", hypermatch.Equals("firing")),
+		hypermatch.Cond("severity", hypermatch.AnyOf(hypermatch.Equals("critical"), hypermatch.Equals("warning"))),
+		hypermatch.Cond("tags", hypermatch.AllOf(hypermatch.Equals("shop"), hypermatch.Equals("backend"))),
 	})
 	if err != nil {
 		panic(err)
@@ -282,4 +276,50 @@ func ExampleHyperMatch_RemoveRule() {
 	// Output:
 	// [shop search]
 	// [search]
+}
+
+// Example_alternatives pages the on-call team for production events that
+// belong to the shop team or are critical.
+func Example_alternatives() {
+	hm := hypermatch.New[string]()
+	err := hm.AddRule("page", hypermatch.ConditionSet{
+		hypermatch.Cond("env", hypermatch.Equals("prod")),
+		hypermatch.Or(
+			hypermatch.ConditionSet{hypermatch.Cond("team", hypermatch.Equals("shop"))},
+			hypermatch.ConditionSet{hypermatch.Cond("severity", hypermatch.Equals("critical"))},
+		),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, event := range []string{
+		`{"env": "prod", "team": "shop"}`,
+		`{"env": "prod", "severity": "critical"}`,
+		`{"env": "dev", "severity": "critical"}`,
+	} {
+		matches, _ := hm.MatchJSON([]byte(event))
+		fmt.Println(matches)
+	}
+	// Output:
+	// [page]
+	// [page]
+	// []
+}
+
+// Example_numbers compares values as numbers, whatever their notation.
+func Example_numbers() {
+	hm := hypermatch.New[string]()
+	add := func(id string, c hypermatch.Condition) {
+		if err := hm.AddRule(id, hypermatch.ConditionSet{c}); err != nil {
+			panic(err)
+		}
+	}
+	add("server-error", hypermatch.Cond("status", hypermatch.Between(hypermatch.GreaterThanOrEqual(500), hypermatch.LessThan(600))))
+	add("exactly-503", hypermatch.Cond("status", hypermatch.NumericEquals(503)))
+	add("slow", hypermatch.Cond("latency_ms", hypermatch.GreaterThan(1000)))
+
+	matches, err := hm.MatchJSON([]byte(`{"status": 5.03e2, "latency_ms": 1500}`))
+	fmt.Println(matches, err)
+	// Output: [server-error exactly-503 slow] <nil>
 }
