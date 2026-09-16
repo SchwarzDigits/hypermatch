@@ -144,30 +144,35 @@ type globAccept struct {
 	reach list[*leaf] // patterns ending here with a trailing '*'
 }
 
-// insert adds the valid, folded wildcard pattern for leaf l. Writer only.
+// insert adds the valid, folded wildcard pattern for leaf l. It walks the
+// pattern rather than splitting it, which takes no memory. Writer only.
 func (n *globNode) insert(pattern string, l *leaf) {
-	parts, _ := splitWildcard(pattern)
-	trailing := parts[len(parts)-1] == ""
-	if trailing {
-		parts = parts[:len(parts)-1]
-	}
-	for i, part := range parts {
-		if i > 0 { // a wildcard precedes part
+	trailing := false
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		switch c {
+		case '*':
+			if i == len(pattern)-1 {
+				trailing = true
+				continue
+			}
 			s := n.spin.Load()
 			if s == nil {
 				s = &globNode{spinner: true}
 				n.spin.Store(s)
 			}
 			n = s
+			continue
+		case '\\': // escapes the next byte
+			i++
+			c = pattern[i]
 		}
-		for j := 0; j < len(part); j++ {
-			k, ok := n.kids.get(part[j])
-			if !ok {
-				k = new(globNode)
-				n.kids.put(part[j], k)
-			}
-			n = k
+		k, ok := n.kids.get(c)
+		if !ok {
+			k = new(globNode)
+			n.kids.put(c, k)
 		}
+		n = k
 	}
 	a := n.accept.Load()
 	if a == nil {

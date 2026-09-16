@@ -120,6 +120,12 @@ func normalizePattern(p *Pattern) (*expr, error) {
 		case PatternSuffix:
 			return newLeaf(leafSuffix, v), nil
 		}
+		if strings.IndexByte(v, '\\') < 0 {
+			if strings.Contains(v, "**") {
+				return nil, fmt.Errorf("[%s] must not contain two consecutive wildcards", p.Type)
+			}
+			return plainWildcardLeaf(v), nil
+		}
 		parts, err := splitWildcard(v)
 		if err != nil {
 			return nil, fmt.Errorf("[%s] %w", p.Type, err)
@@ -250,6 +256,14 @@ func betweenInterval(p *Pattern) (numInterval, error) {
 // its wildcards, with escapes resolved: `a*b\*c` has the parts "a" and
 // "b*c", and a pattern without wildcards has a single part.
 func splitWildcard(v string) ([]string, error) {
+	if strings.IndexByte(v, '\\') < 0 {
+		// The parts are pieces of v, so nothing is copied.
+		parts := strings.Split(v, "*")
+		if len(parts) > 2 && slices.Contains(parts[1:len(parts)-1], "") {
+			return nil, errors.New("must not contain two consecutive wildcards")
+		}
+		return parts, nil
+	}
 	parts := make([]string, 0, 2)
 	var b strings.Builder
 	for i := 0; i < len(v); i++ {
@@ -273,6 +287,28 @@ func splitWildcard(v string) ([]string, error) {
 		return nil, errors.New("must not contain two consecutive wildcards")
 	}
 	return parts, nil
+}
+
+// plainWildcardLeaf returns the cheapest leaf equivalent to the folded
+// wildcard pattern v, which contains no escapes. It takes no memory, unlike
+// splitting the pattern, and almost all patterns take this way.
+func plainWildcardLeaf(v string) *expr {
+	if v == "*" {
+		return newLeaf(leafExists, "")
+	}
+	core, lead := strings.CutPrefix(v, "*")
+	core, trail := strings.CutSuffix(core, "*")
+	switch {
+	case strings.Contains(core, "*"):
+		return newLeaf(leafGlob, v)
+	case !lead && !trail:
+		return newLeaf(leafEquals, core)
+	case !lead:
+		return newLeaf(leafPrefix, core)
+	case !trail:
+		return newLeaf(leafSuffix, core)
+	}
+	return newLeaf(leafGlob, v)
 }
 
 // wildcardLeaf returns the cheapest leaf equivalent to the folded wildcard
