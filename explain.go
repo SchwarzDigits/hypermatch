@@ -48,29 +48,24 @@ func Explain(rule ConditionSet, event []Property) (Explanation, error) {
 	if err := ValidateRule(rule); err != nil {
 		return Explanation{}, err
 	}
-	values := make(map[string][]string, len(event))
-	for _, p := range event {
-		values[p.Path] = append(values[p.Path], p.Values...)
-	}
-	return explainSet(rule, values), nil
+	return explainSet(rule, event), nil
 }
 
-// explainSet reports how the valid rule matches the values of an event, by
-// path.
-func explainSet(rule ConditionSet, values map[string][]string) Explanation {
+// explainSet reports how the valid rule matches event.
+func explainSet(rule ConditionSet, event []Property) Explanation {
 	e := Explanation{Matched: true, Conditions: make([]ConditionResult, len(rule))}
 	for i, c := range rule {
 		r := &e.Conditions[i]
 		if c.Or != nil {
 			r.Or = make([]Explanation, len(c.Or))
 			for j, alternative := range c.Or {
-				r.Or[j] = explainSet(alternative, values)
+				r.Or[j] = explainSet(alternative, event)
 				r.Matched = r.Matched || r.Or[j].Matched
 			}
 			e.Matched = e.Matched && r.Matched
 			continue
 		}
-		vs := values[c.Path]
+		vs := valuesAt(event, c.Path)
 		folded := make([]string, len(vs))
 		for j, v := range vs {
 			folded[j] = fold(v)
@@ -83,6 +78,20 @@ func explainSet(rule ConditionSet, values map[string][]string) Explanation {
 		e.Matched = e.Matched && r.Matched
 	}
 	return e
+}
+
+// valuesAt returns the values of event at path. For a wildcard path such as
+// "labels.*", these are the values of all paths that begin with "labels.".
+func valuesAt(event []Property, path string) []string {
+	base, wild := wildBase(path)
+	var vs []string
+	for _, p := range event {
+		below := wild && len(p.Path) > len(base) && p.Path[len(base)] == '.' && strings.HasPrefix(p.Path, base)
+		if below || p.Path == path {
+			vs = append(vs, p.Values...)
+		}
+	}
+	return vs
 }
 
 // ExplainJSON is like Explain, but takes the event as a JSON object, like

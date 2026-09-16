@@ -89,7 +89,9 @@ func decodeCondition(path string, raw json.RawMessage) (Condition, error) {
 }
 
 // Condition is a single condition of a ConditionSet: the values of the
-// property at Path must match Pattern. Paths are case-sensitive.
+// property at Path must match Pattern. Paths are case-sensitive. A path
+// ending in ".*", such as "labels.*", is a wildcard path: its values are
+// the values of all paths that begin with "labels.".
 type Condition struct {
 	Path    string  `json:"path"`
 	Pattern Pattern `json:"pattern"`

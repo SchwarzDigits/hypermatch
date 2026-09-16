@@ -17,7 +17,8 @@
 //     way to combine alternatives on different paths
 //
 // Except for {"exists": false}, a condition never matches a property that
-// is absent from the event.
+// is absent from the event. A condition on a path ending in ".*", such as
+// "labels.*", looks at the values of all paths that begin with "labels.".
 //
 // Rules are compiled into a trie of shared conditions backed by hash and
 // automaton indexes, so the cost of matching an event depends on the event

@@ -7,9 +7,11 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 - Functions that build rules in Go with less typing: `Cond`, `Or`, `Equals`, `Prefix`, `Suffix`, `Wildcard`, `AnyOf`, `AllOf`, `AnythingBut`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `NumericEquals`, `Between`, `CIDR`, `Exists` and `Absent`.
 - The `cidr` pattern, which matches IPv4 and IPv6 addresses inside a network such as `10.0.0.0/8`, without allocating.
+- Wildcard paths: a condition on a path ending in `.*`, such as `labels.*`, looks at the values of all paths that begin with `labels.`, as if they were one property.
 - Runnable examples for alternatives with `$or` and for numeric patterns.
 
 ### Changed
+- Condition paths ending in `.*` are wildcard paths. Before, they matched only properties with exactly that path, which they still match.
 - Conditions are evaluated against a set of the leaves that matched, instead of searching a sorted list of them. Rule sets with many different `anythingBut` conditions on the same path match up to about twice as fast, and the set is only built for conditions that need it.
 
 ## [2.2.0] - 2026-09-16

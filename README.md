@@ -22,7 +22,7 @@ v2 is a new matching engine, and everything below came with it:
 - 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` tests whether a field is there at all, and thousands of ranges on one field are found by binary search.
 - 🌐 **IP networks**: `cidr` matches IPv4 and IPv6 addresses against networks such as `10.0.0.0/8`, without allocating.
 - 🧩 **Real logic**: `anyOf`, `allOf` and `anythingBut` nest as deeply as you like, and `$or` combines whole conditions, including conditions on different fields.
-- ✳️ **Wildcards**: `*` anywhere in a pattern, and `\*` for a literal asterisk.
+- ✳️ **Wildcards**: `*` anywhere in a pattern, `\*` for a literal asterisk, and paths such as `labels.*` that look at all fields below `labels`.
 - 🎯 **Routing**: `MatchFirst` returns only the first matching rule, the one added earliest, and skips everything that cannot come before it. Add the rules in the order they should win, and it routes.
 - 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not, as text or as JSON for a user interface.
 - 🏁 **Ahead of the field**: on the same 100,000 rules and the same JSON events, hypermatch matches about 5 times as many events per second as [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, and about 45 times as many as [quamina](https://github.com/timbray/quamina), with a fraction of the memory per rule. Rules with wildcards, which slow both of them down to a crawl, are where hypermatch pulls furthest ahead. See the [comparison](#performance).
@@ -164,6 +164,7 @@ These rules hold for every condition:
 - **Supported Types**: Values are strings or string arrays.
 - **Missing Properties**: A condition never matches a property that is absent from the event, except for `{"exists": false}`. This includes `anythingBut`. A property without values counts as absent.
 - **Repeated Paths**: Several properties with the same path in an event act as one property with all their values. Several conditions on the same path in a rule must all match, just like `allOf`.
+- **Wildcard Paths**: A path ending in `.*`, such as `labels.*`, looks at the values of all paths that begin with `labels.`, as if they were one property. See [Wildcard paths](#wildcard-paths).
 
 Here’s an example rule that matches the event above:
 
@@ -425,6 +426,21 @@ This rule matches production events that either belong to the shop team or are e
 - In Go, `$or` is the `Or` field of a `Condition`, which holds the alternative condition sets.
 - Rules with `$or` are expanded into their combinations when they are added, so matching them costs nothing extra. A rule that combines into more than 1,024 condition sets is rejected.
 - A key `"$or"` whose value is an object is an ordinary condition on the path `$or`.
+
+### Wildcard paths
+A path that ends in `.*` looks at all fields below a field. This helps with maps whose keys are not known in advance, such as labels or annotations:
+
+```javascript
+{
+    "labels.*": {
+        "equals": "production"
+    }
+}
+```
+
+The rule matches `{"labels": {"env": "production"}}` as well as `{"labels": {"stage": "production"}}` and `{"labels": {"eu": {"stage": "production"}}}`. The values of all paths that begin with `labels.` count as the values of one property, so `anythingBut` holds only if none of them matches, and `{"exists": false}` only if there are none. The path `labels` itself is not below `labels.*`.
+
+Only a final `*` after a `.` makes a wildcard path: `labels.*.env` and `*` are ordinary paths. Once rules use wildcard paths, matching looks up the part before every `.` in the paths of an event.
 
 ## Rule Identifiers
 

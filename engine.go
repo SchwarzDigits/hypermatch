@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"hash/maphash"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -16,13 +17,31 @@ import (
 
 type trie struct {
 	root      state
-	paths     strMap[string]   // the path of every condition, for MatchJSON
-	prefixes  strMap[struct{}] // the parts of these paths before each "."
-	hasAbsent atomic.Bool      // some condition is {"exists": false}
-	edgeSeq   uint64           // writer only
+	paths     strMap[string]    // the path of every condition, for MatchJSON
+	prefixes  strMap[struct{}]  // the parts of these paths before each "."
+	wilds     strMap[*wildPath] // the paths ending in ".*", by the part before
+	hasAbsent atomic.Bool       // some condition is {"exists": false}
+	edgeSeq   uint64            // writer only
 }
 
-// addPath records path and its prefixes for MatchJSON. Writer only.
+// wildPath is a condition path such as "labels.*", which refers to the
+// values of all paths that begin with "labels.".
+type wildPath struct {
+	path string
+	hash uint64 // of path
+}
+
+// wildBase returns the part of path before its final ".*", and whether
+// path is a wildcard path. The path ".*" is not: it has no part before.
+func wildBase(path string) (string, bool) {
+	if len(path) > 2 && strings.HasSuffix(path, ".*") {
+		return path[:len(path)-2], true
+	}
+	return "", false
+}
+
+// addPath records path and its prefixes, for MatchJSON, and wildcard paths,
+// for all Match calls. Writer only.
 func (t *trie) addPath(path string) {
 	if _, ok := t.paths.get(path); ok {
 		return
@@ -33,6 +52,9 @@ func (t *trie) addPath(path string) {
 				t.prefixes.put(path[:i], struct{}{})
 			}
 		}
+	}
+	if base, ok := wildBase(path); ok {
+		t.wilds.put(base, &wildPath{path: path, hash: maphash.String(hashSeed, path)})
 	}
 	t.paths.put(path, path)
 }
@@ -356,9 +378,10 @@ type scratch struct {
 	bestKey uint32 // its order key, or math.MaxUint32 if none was found
 
 	// MatchJSON only.
-	jvals []jval // values found, before they are grouped into spans
-	pbuf  []byte // path of the current JSON value
-	jtmp  []byte // decoded strings that are not needed
+	jvals []jval     // values found, before they are grouped into spans
+	pbuf  []byte     // path of the current JSON value
+	jtmp  []byte     // decoded strings that are not needed
+	jwild []openWild // the wildcard paths the current JSON value is below
 }
 
 // property is an event property with at least one value.
@@ -399,7 +422,8 @@ func (r *vref) number(v []byte) (float64, bool) {
 
 var scratchPool = sync.Pool{New: func() any { return new(scratch) }}
 
-func (sc *scratch) reset(event []Property) {
+// reset prepares sc for matching event against the rules of t.
+func (sc *scratch) reset(event []Property, t *trie) {
 	sc.props = sc.props[:0]
 	sc.spans = sc.spans[:0]
 	size := 8
@@ -408,6 +432,7 @@ func (sc *scratch) reset(event []Property) {
 	}
 	sc.initSlots(size)
 	mask := uint64(size - 1)
+	wilds := t.wilds.t.Load() // nil unless a rule has a wildcard path
 	for i := range event {
 		p := &event[i]
 		if len(p.Values) == 0 {
@@ -429,11 +454,39 @@ func (sc *scratch) reset(event []Property) {
 				break
 			}
 		}
+		if wilds != nil {
+			sc.addWild(wilds, p)
+			mask = uint64(len(sc.slots) - 1) // the table may have grown
+		}
 	}
 	sc.fbuf = sc.fbuf[:0]
 	sc.frefs = sc.frefs[:0]
 	sc.out = sc.out[:0]
 	sc.first = false
+}
+
+// addWild adds the values of p to the spans of the wildcard paths p is
+// below. If p has a wildcard path itself, its own span already holds them.
+func (sc *scratch) addWild(wilds *strTable[*wildPath], p *Property) {
+	for i := 0; i < len(p.Path); i++ {
+		if p.Path[i] != '.' {
+			continue
+		}
+		base := p.Path[:i]
+		w, ok := wilds.lookup(maphash.String(hashSeed, base), base)
+		if !ok || w.path == p.Path {
+			continue
+		}
+		idx := len(sc.props)
+		sc.props = append(sc.props, property{values: p.Values, next: -1})
+		sp := &sc.spans[sc.jsonSpan(w.path, w.hash)]
+		if sp.first < 0 {
+			sp.first, sp.folded = idx, false // new: its values are not folded yet
+		} else {
+			sc.props[sp.last].next = idx
+		}
+		sp.last = idx
+	}
 }
 
 // visible reports whether rule n is one of the rules this call matches.
@@ -495,6 +548,7 @@ func (sc *scratch) release() {
 	// Do not retain the caller's strings or old tables.
 	clear(sc.props)
 	clear(sc.spans)
+	clear(sc.jwild[:cap(sc.jwild)])
 	sc.removed, sc.meta = nil, nil
 	if cap(sc.out) > 1<<16 || cap(sc.fbuf) > 1<<20 {
 		return // let oversized buffers be collected

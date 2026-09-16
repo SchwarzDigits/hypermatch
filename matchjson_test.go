@@ -168,8 +168,8 @@ func jsonProperties(data []byte) ([]Property, bool) {
 }
 
 var (
-	jsonKeys      = []string{"a", "b", "c", "A", "a.b", ""}
-	jsonRulePaths = []string{"a", "b", "c", "A", "a.b", "b.a", ".a", "a.a.b"}
+	jsonKeys      = []string{"a", "b", "c", "A", "a.b", "", "*", ".b"}
+	jsonRulePaths = []string{"a", "b", "c", "A", "a.b", "b.a", ".a", "a.a.b", "a.*", "a.b.*", "b.*", ".*", "..*", "a.*.*", "a..*"}
 	jsonNumbers   = []string{"0", "-1", "42", "1.5", "1E3", "-0.25e-2", "500"}
 	jsonEscapes   = []string{`"Ab"`, `"ä"`, `"😀"`, `"\ud800x"`, `"a\/b\n"`, `"\uDC00\ud800􏿿"`}
 )

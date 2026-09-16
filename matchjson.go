@@ -112,8 +112,9 @@ func (sc *scratch) resetJSON(data []byte, t *trie) error {
 	sc.out = sc.out[:0]
 	sc.jvals = sc.jvals[:0]
 	sc.pbuf = sc.pbuf[:0]
+	sc.jwild = sc.jwild[:0]
 
-	p := jsonParser{data: data, sc: sc, t: t}
+	p := jsonParser{data: data, sc: sc, t: t, wilds: t.wilds.t.Load()}
 	p.ws()
 	if p.pos >= len(data) || data[p.pos] != '{' {
 		return p.fail("expected an object")
@@ -156,7 +157,7 @@ func (sc *scratch) groupJSONValues() {
 }
 
 // jsonSpan returns the index of the span of path, whose hash is h, creating
-// it if necessary.
+// it if necessary. A new span has no values, which MatchJSON records folded.
 func (sc *scratch) jsonSpan(path string, h uint64) int {
 	if 2*(len(sc.spans)+1) > len(sc.slots) {
 		sc.rehash(2 * len(sc.slots))
@@ -192,10 +193,18 @@ func (sc *scratch) rehash(size int) {
 // jsonParser validates a JSON event and records the values of the paths its
 // trie refers to. The path of the current value is sc.pbuf[:path].
 type jsonParser struct {
-	data []byte
-	pos  int
-	sc   *scratch
-	t    *trie
+	data  []byte
+	pos   int
+	sc    *scratch
+	t     *trie
+	wilds *strTable[*wildPath] // nil unless a rule has a wildcard path
+}
+
+// openWild is a wildcard path that the current value is below, together
+// with the index of its span, or -1 until it has a value.
+type openWild struct {
+	w    *wildPath
+	span int
 }
 
 func (p *jsonParser) fail(msg string) error {
@@ -226,7 +235,7 @@ func (p *jsonParser) value(path, depth int, record bool) error {
 		if depth >= maxJSONDepth {
 			return p.fail("nesting too deep")
 		}
-		return p.object(path, depth+1, record && p.isPrefix(path), false)
+		return p.object(path, depth+1, record && (p.below() || p.isPrefix(path)), false)
 	case c == '[':
 		if depth >= maxJSONDepth {
 			return p.fail("nesting too deep")
@@ -234,6 +243,9 @@ func (p *jsonParser) value(path, depth int, record bool) error {
 		return p.array(path, depth+1, record)
 	case c == '"':
 		if record {
+			if p.below() {
+				return p.wildStr(path)
+			}
 			if span := p.span(path); span >= 0 {
 				return p.str(span)
 			}
@@ -262,6 +274,14 @@ func (p *jsonParser) object(path, depth int, record, root bool) error {
 		p.pos++
 		return nil
 	}
+	outer, open := 0, 0
+	if p.wilds != nil {
+		outer = len(p.sc.jwild)
+		if record && !root {
+			p.openWild(p.sc.pbuf[:path]) // all values of the object are below its path
+		}
+		open = len(p.sc.jwild)
+	}
 	for {
 		p.ws()
 		if p.pos >= len(p.data) || p.data[p.pos] != '"' {
@@ -274,11 +294,15 @@ func (p *jsonParser) object(path, depth int, record, root bool) error {
 			if !root {
 				buf = append(buf, '.')
 			}
+			key := len(buf)
 			if buf, err = p.decodeStr(buf, false); err != nil {
 				return err
 			}
 			p.sc.pbuf = buf
 			child = len(buf)
+			if p.wilds != nil {
+				p.openWilds(key, child) // below a "." in the key
+			}
 		} else if p.sc.jtmp, err = p.decodeStr(p.sc.jtmp[:0], false); err != nil {
 			return err
 		}
@@ -290,6 +314,9 @@ func (p *jsonParser) object(path, depth int, record, root bool) error {
 		if err := p.value(child, depth, record); err != nil {
 			return err
 		}
+		if p.wilds != nil {
+			p.sc.jwild = p.sc.jwild[:open]
+		}
 		p.ws()
 		if p.pos >= len(p.data) {
 			return p.fail("unexpected end")
@@ -299,6 +326,9 @@ func (p *jsonParser) object(path, depth int, record, root bool) error {
 			p.pos++
 		case '}':
 			p.pos++
+			if p.wilds != nil {
+				p.sc.jwild = p.sc.jwild[:outer]
+			}
 			return nil
 		default:
 			return p.fail("expected ',' or '}'")
@@ -429,7 +459,8 @@ func (p *jsonParser) digits() bool {
 // raw records the ASCII text data[start:pos] for the path, folded.
 func (p *jsonParser) raw(path, start int) {
 	span := p.span(path)
-	if span < 0 {
+	below := p.below()
+	if span < 0 && !below {
 		return
 	}
 	lo := len(p.sc.fbuf)
@@ -439,7 +470,65 @@ func (p *jsonParser) raw(path, start int) {
 		}
 		p.sc.fbuf = append(p.sc.fbuf, c)
 	}
+	if below {
+		p.record(span, lo, len(p.sc.fbuf))
+		return
+	}
 	p.sc.jvals = append(p.sc.jvals, jval{span: span, lo: lo, hi: len(p.sc.fbuf)})
+}
+
+// below reports whether the current value is below an open wildcard path.
+func (p *jsonParser) below() bool {
+	return p.wilds != nil && len(p.sc.jwild) > 0
+}
+
+// openWilds opens the wildcard paths whose part before ".*" ends at a "."
+// in sc.pbuf[from:to].
+func (p *jsonParser) openWilds(from, to int) {
+	for i := from; i < to; i++ {
+		if p.sc.pbuf[i] == '.' {
+			p.openWild(p.sc.pbuf[:i])
+		}
+	}
+}
+
+// openWild opens the wildcard path whose part before ".*" is base, if a rule
+// refers to it.
+func (p *jsonParser) openWild(base []byte) {
+	if w, ok := p.wilds.lookupBytes(maphash.Bytes(hashSeed, base), base); ok {
+		p.sc.jwild = append(p.sc.jwild, openWild{w: w, span: -1})
+	}
+}
+
+// wildStr records the folded content of the string at p.pos for the path
+// sc.pbuf[:path] and for the open wildcard paths.
+func (p *jsonParser) wildStr(path int) error {
+	lo := len(p.sc.fbuf)
+	buf, err := p.decodeStr(p.sc.fbuf, true)
+	if err != nil {
+		return err
+	}
+	p.sc.fbuf = buf
+	p.record(p.span(path), lo, len(buf))
+	return nil
+}
+
+// record records the value fbuf[lo:hi] for span, unless span is -1, and for
+// the open wildcard paths. A value whose path is an open wildcard path
+// itself is recorded once.
+func (p *jsonParser) record(span, lo, hi int) {
+	if span >= 0 {
+		p.sc.jvals = append(p.sc.jvals, jval{span: span, lo: lo, hi: hi})
+	}
+	for i := range p.sc.jwild {
+		o := &p.sc.jwild[i]
+		if o.span < 0 {
+			o.span = p.sc.jsonSpan(o.w.path, o.w.hash)
+		}
+		if o.span != span {
+			p.sc.jvals = append(p.sc.jvals, jval{span: o.span, lo: lo, hi: hi})
+		}
+	}
 }
 
 // decodeStr parses the string at p.pos and appends its content to dst,

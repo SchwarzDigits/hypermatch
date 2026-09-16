@@ -64,6 +64,16 @@ func (r *refMatcher) match(event []Property) []int {
 	return out
 }
 
+// refRefersTo reports whether a condition on path refers to the property at
+// prop: if prop is path, or, for a path ending in ".*" such as "a.*", if
+// prop begins with "a.".
+func refRefersTo(path, prop string) bool {
+	if len(path) > 2 && strings.HasSuffix(path, ".*") {
+		return strings.HasPrefix(prop, strings.TrimSuffix(path, "*"))
+	}
+	return prop == path
+}
+
 // refMatches reports whether event matches the rule cs.
 func refMatches(cs ConditionSet, event []Property) bool {
 	for _, c := range cs {
@@ -79,7 +89,7 @@ func refMatches(cs ConditionSet, event []Property) bool {
 		}
 		var values []string
 		for _, p := range event {
-			if p.Path == c.Path {
+			if refRefersTo(c.Path, p.Path) {
 				for _, v := range p.Values {
 					values = append(values, fold(v))
 				}
@@ -238,13 +248,22 @@ func (s *byteSource) intn(n int) int {
 
 var (
 	// A small alphabet makes rules overlap often. "A" is a separate path
-	// because paths are case-sensitive.
-	genPaths = []string{"a", "b", "c", "A"}
+	// because paths are case-sensitive. The paths in genDeepPaths are below
+	// the wildcard paths "c.*" and "c.d.*" or not.
+	genPaths     = []string{"a", "b", "c", "A"}
+	genDeepPaths = []string{"c.*", "c.d", "c.d.*", "c.d.e", "c.dx", "cx.d", ".*", "c..*", "c.", "cd*"}
 	// genRunes contains upper case, non-ASCII, the Kelvin sign (which
 	// folds to the one-byte "k"), invalid UTF-8, and `\` and "*", which are
 	// literal in values and in non-wildcard patterns.
 	genRunes = []string{"a", "b", "A", "-", "ä", "Ä", "K", "k", "\xff", `\`, "*"}
 )
+
+func genPath(src source) string {
+	if src.intn(3) == 0 {
+		return genDeepPaths[src.intn(len(genDeepPaths))]
+	}
+	return genPaths[src.intn(len(genPaths))]
+}
 
 func genString(src source, maxLen int) string {
 	var b strings.Builder
@@ -355,10 +374,10 @@ var existsFalse = Pattern{Type: PatternExists, Value: "false"}
 func genRule(src source) ConditionSet {
 	switch src.intn(8) {
 	case 0:
-		return ConditionSet{cond(genPaths[src.intn(len(genPaths))], existsFalse)}
+		return ConditionSet{cond(genPath(src), existsFalse)}
 	case 1:
 		cs := genConditions(src)
-		path := genPaths[src.intn(len(genPaths))]
+		path := genPath(src)
 		if !slices.ContainsFunc(cs, func(c Condition) bool { return c.Path == path }) {
 			cs = append(cs, cond(path, existsFalse))
 		}
@@ -380,7 +399,7 @@ func genRule(src source) ConditionSet {
 func genConditions(src source) ConditionSet {
 	cs := make(ConditionSet, 1+src.intn(3))
 	for i := range cs {
-		cs[i] = cond(genPaths[src.intn(len(genPaths))], genPattern(src, 0))
+		cs[i] = cond(genPath(src), genPattern(src, 0))
 	}
 	return cs
 }
@@ -392,7 +411,7 @@ func genEvent(src source) []Property {
 		for j := range values {
 			values[j] = genValue(src)
 		}
-		event[i] = Property{Path: genPaths[src.intn(len(genPaths))], Values: values}
+		event[i] = Property{Path: genPath(src), Values: values}
 	}
 	return event
 }

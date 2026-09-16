@@ -183,6 +183,27 @@ var benchWorkloads = []benchWorkload{
 		},
 		wantMatches: 1,
 	},
+	{
+		// Wildcard paths: ten rules per service, each looking for a value
+		// among all labels.
+		name: "labels",
+		rule: func(i, n int) ConditionSet {
+			return ConditionSet{
+				{Path: "labels.*", Pattern: equalsP("team-" + strconv.Itoa(i%10))},
+				{Path: "service", Pattern: equalsP("svc-" + strconv.Itoa(i/10))},
+			}
+		},
+		event: func(i, n int) []Property {
+			return []Property{
+				{Path: "labels.env", Values: []string{"prod"}},
+				{Path: "labels.team", Values: []string{"team-" + strconv.Itoa(i%10)}},
+				{Path: "labels.region", Values: []string{"eu"}},
+				{Path: "service", Values: []string{"svc-" + strconv.Itoa((i%n)/10)}},
+				{Path: "host", Values: []string{"web-1"}},
+			}
+		},
+		wantMatches: 1,
+	},
 }
 
 // benchAddr returns the address off in the block of rule i.
