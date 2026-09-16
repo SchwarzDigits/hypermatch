@@ -9,37 +9,30 @@
 
 ![hypermatch logo](./logo/logo-small.png)
 
-# What's new in v2.2 ✨
-
-- 🔢 **Numbers, exactly**: `{"eq": 500}` matches `500`, `500.0` and `5e2`. Ranges and single numbers are found by binary search, so 10,000 price bands or thresholds on one path take 130 ns per event instead of 3.3 µs.
-- 🧩 **Alternatives in one rule**: `$or` combines whole conditions, including conditions on different paths. Rules are expanded when they are added, so matching them costs nothing extra.
-- ✳️ **Literal asterisks**: in wildcard patterns, `\*` matches a `*` and `\\` a `\`.
-- 🔍 **Explanations for user interfaces**: `Explanation` encodes to JSON with a result for every condition, sub-pattern and alternative.
-
-Matching, memory per rule and adding rules are as fast as before, checked with A/B benchmarks for every change.
-
 # What's new in v2 🚀
 
-hypermatch v2 has a brand-new matching engine:
+v2 replaced the matching engine, and v2.1 and v2.2 built on it:
 
-- ⚡ **20 to 30 times faster** on typical rule sets. An event is matched against 100,000 rules in about half a microsecond.
-- 🔒 **Lock-free matching** on all cores, at 14 million events per second on 14 cores, even while rules are being added.
-- 🪶 **Lean**: less than 450 bytes per rule, allocation-free matching with `AppendMatches`, no dependencies.
-- ✅ **Precise**: every pattern type follows precisely specified semantics, checked continuously with differential tests and fuzzing.
+- ⚡ **Orders of magnitude faster**: rules are compiled into a shared index, so matching time depends on the event and on the rules it matches, and hardly on how many rules there are. On typical rule sets v2 matches 20 to 30 times as fast as v1, and with prefix or `anythingBut` conditions by far more.
+- 🔒 **Lock-free matching**: `Match` never blocks and scales with the number of cores, even while rules are added, replaced or removed.
+- 🪶 **Lean**: a rule takes a few hundred bytes, `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all. No dependencies.
+- ✅ **Precise**: every pattern type follows precisely specified semantics, verified continuously against a reference implementation with differential tests, fuzzing and race tests.
 - ✨ **Modern API**: generic rule identifiers, validation errors that point to the problem, and results in insertion order.
-- 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly, 3 to 5 times as fast as decoding them first.
-- 🔄 **Live rule updates**: `RemoveRule` removes rules at run time without ever blocking `Match`.
-- 🔢 **Numbers and missing fields**: compare values numerically with `lt`, `lte`, `gt`, `gte`, `eq` and `between`, and match present or absent fields with `exists`.
-- 🎯 **Routing**: `MatchFirst` finds the highest-priority rule and skips everything that cannot beat it, and `ReplaceRule` swaps rules atomically.
-- 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not.
-- 🏁 **Ahead of the field**: with 100,000 wildcard rules, hypermatch matches 1.5 million events per second. [quamina](https://github.com/timbray/quamina) matches 5. See the [comparison](#performance).
+- 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly and decodes only the values the rules refer to, several times as fast as decoding them first.
+- 🔄 **Live rule updates**: `AddRule`, `ReplaceRule` and `RemoveRule` change the rules at run time. Replacing is atomic, and nothing ever blocks `Match`.
+- 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` matches present or absent fields, and thousands of ranges on one field are found by binary search.
+- 🧩 **Alternatives in one rule**: `$or` combines whole conditions, including conditions on different paths. Rules are expanded when they are added, so matching them costs nothing extra.
+- ✳️ **Wildcards with escapes**: `\*` matches a literal `*`, and `\\` a backslash.
+- 🎯 **Routing**: `MatchFirst` finds the rule with the highest priority and skips everything that cannot beat it.
+- 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not, as text or as JSON for a user interface.
+- 🏁 **Ahead of the field**: on the same 100,000 rules and the same JSON events, hypermatch matches about 5 times as many events per second as [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, and about 45 times as many as [quamina](https://github.com/timbray/quamina), with a fraction of the memory per rule. Rules with wildcards, which slow both of them down to a crawl, are where hypermatch pulls furthest ahead. See the [comparison](#performance).
 
 Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
 
 # Introduction
 Hypermatch is a high-performance Go library that matches events against large sets of rules. Rules are compiled into a shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
-- **Fast**: Matches an event against 100,000 rules in about half a microsecond on a single core, and 14 million events per second on 14 cores. [Benchmarks](#performance)
+- **Fast**: Hundreds of thousands of rules are no problem, and matching scales with the number of cores. [Benchmarks](#performance)
 - **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added or removed.
 - **Correct**: The matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
 - **Readable Rule Format**: Write rules in Go or as human-readable JSON objects.
@@ -550,7 +543,7 @@ For a user interface, the `Explanation` holds the same information in fields and
 
 # Performance
 
-hypermatch v2 matches an event against 100,000 rules in well under a microsecond, 20 to 30 times faster than v1 on typical rule sets. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. The numbers are medians of five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and how long it takes hardly depends on the number of rules. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. Absolute times belong to the machine they were measured on: these are medians of five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
 
 | Workload | Rules | Time per event | Events per second |
 |---|---|---:|---:|
@@ -565,15 +558,21 @@ hypermatch v2 matches an event against 100,000 rules in well under a microsecond
 - **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload reaches 14 million events per second.
 - **Allocations**: `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all.
 - **JSON events**: `MatchJSON` matches the events of the mixed workload, given as JSON, in 0.65 µs. That is 3.5 times as fast as `json.Unmarshal` followed by `Match` (2.27 µs).
-- **Memory**: A rule takes 285 to 431 bytes.
+- **Memory**: A rule takes 301 to 447 bytes.
 - **Adding rules**: Adding 10,000 rules takes 4 to 10 ms.
 
-The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch and [quamina](https://github.com/timbray/quamina), on a single goroutine. With `MatchJSON`, hypermatch gets exactly the same JSON documents as quamina:
+The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch, [quamina](https://github.com/timbray/quamina) and [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, on a single core. The rules combine `equals`, `anythingBut` and `anyOf` conditions, and every event matches ten of them. With `MatchJSON`, hypermatch gets exactly the same JSON documents as the other two:
 
-| Rules | hypermatch `Match` | hypermatch `MatchJSON` | quamina |
-|---|---:|---:|---:|
-| With a wildcard condition | 1,520,000 events/s | 1,230,000 events/s | 5 events/s |
-| Without the wildcard condition | 1,940,000 events/s | 1,540,000 events/s | 33,200 events/s |
+| Candidate | Events per second | Memory per rule |
+|---|---:|---:|
+| hypermatch `Match` | 1,913,905 | 394 B |
+| hypermatch `MatchJSON` | 1,473,252 | 394 B |
+| AWS Event Ruler | 281,148 | 1,805 B |
+| quamina | 32,612 | 13,590 B |
+
+hypermatch matches about 5 times as many events per second as Event Ruler and about 45 times as many as quamina, and a rule takes a fraction of the memory. Event Ruler runs on the JVM, which matches events for five seconds before the measurement so that the JIT has compiled everything.
+
+Wildcard patterns are the special case where the distance is largest. With a wildcard condition in every rule, hypermatch keeps about three quarters of its throughput, 1,467,174 events per second, while quamina drops to 5 events per second and Event Ruler did not finish building 100,000 such rules within 25 minutes. Two things make the difference: identical conditions exist only once, so all rules share a single automaton, and hypermatch simulates that automaton instead of turning it into a deterministic one, whose states multiply when patterns are combined. Rules with a *different* wildcard each stay fast as well, as the wildcard workload in the table above shows.
 
 Things to consider to get maximum performance:
 - Rules that share conditions are evaluated together. Conditions are ordered by path, so conditions on alphabetically early paths that many rules have in common, such as `"env": {"equals": "prod"}`, are checked only once per event.
