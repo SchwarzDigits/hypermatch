@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Changed
 - Condition paths ending in `.*` are wildcard paths. Before, they matched only properties with exactly that path, which they still match.
 - Conditions are evaluated against a set of the leaves that matched, instead of searching a sorted list of them. Rule sets with many different `anythingBut` conditions on the same path match up to about twice as fast, and the set is only built for conditions that need it.
+- `anythingBut` conditions that consist of plain patterns such as `equals`, `prefix` or `lt`, also inside `anyOf`, are no longer evaluated one by one. Instead, the values of an event mark the conditions they rule out. Rule sets with many such conditions on the same path, most of which fail, match about twice as fast.
 
 ## [2.2.0] - 2026-09-16
 

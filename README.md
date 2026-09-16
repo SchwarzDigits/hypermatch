@@ -585,7 +585,7 @@ Wildcard patterns are the special case where the distance is largest. With a wil
 Things to consider to get maximum performance:
 - Rules that share conditions are evaluated together. Conditions are ordered by path, so conditions on alphabetically early paths that many rules have in common, such as `"env": {"equals": "prod"}`, are checked only once per event.
 - `equals`, `prefix`, `suffix` and wildcards of the form `abc*` or `*abc` are hash lookups. Other wildcards run through an automaton, which is still fast, but costs a little more.
-- `anythingBut` conditions are checked for every event that contains their path. Many *different* `anythingBut` conditions at the same position therefore cost time proportional to their number.
+- `anythingBut` conditions are checked for every event that contains their path. If they consist of plain patterns such as `equals`, `prefix` or `lt`, also inside `anyOf`, the values of the event rule them out at once. Others, for example with `allOf` inside, are evaluated one by one, so many *different* ones at the same position cost time proportional to their number.
 - Reuse result slices with `AppendMatches`.
 
 # Migrating from v1
