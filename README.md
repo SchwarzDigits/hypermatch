@@ -16,10 +16,11 @@ v2 is a new matching engine, and everything below came with it:
 - 🔒 **Lock-free matching**: `Match` never blocks and scales with the number of cores, even while rules are added, replaced or removed.
 - 🪶 **Lean**: a rule takes a few hundred bytes, `Match` allocates only the slice it returns, and `AppendMatches` nothing at all. No dependencies.
 - ✅ **Precise**: every pattern type follows precisely specified semantics, checked continuously against a reference implementation with differential tests, fuzzing and race tests.
-- ✨ **Modern API**: generic rule identifiers, validation errors that point at the problem, and results in the order the rules were added.
+- ✨ **Modern API**: generic rule identifiers, short helpers such as `Equals`, `AnyOf` and `Or` for rules written in Go, validation errors that point at the problem, and results in the order the rules were added.
 - 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly and decodes only the values your rules refer to, several times as fast as decoding them first.
 - 🔄 **Live rule updates**: `AddRule`, `ReplaceRule` and `RemoveRule` change the rules at run time. Replacing is atomic, and nothing ever blocks `Match`.
 - 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` tests whether a field is there at all, and thousands of ranges on one field are found by binary search.
+- 🌐 **IP networks**: `cidr` matches IPv4 and IPv6 addresses against networks such as `10.0.0.0/8`, without allocating.
 - 🧩 **Real logic**: `anyOf`, `allOf` and `anythingBut` nest as deeply as you like, and `$or` combines whole conditions, including conditions on different fields.
 - ✳️ **Wildcards**: `*` anywhere in a pattern, and `\*` for a literal asterisk.
 - 🎯 **Routing**: `MatchFirst` returns only the first matching rule, the one added earliest, and skips everything that cannot come before it. Add the rules in the order they should win, and it routes.
@@ -36,7 +37,7 @@ hypermatch matches events against large sets of rules, in Go. Rules are compiled
 - **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are added, replaced or removed.
 - **Correct**: the matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
 - **Readable rules**: write them in Go or as plain JSON objects.
-- **Expressive rules**: equals, prefix, suffix, wildcard, numeric comparisons, ranges, `exists`, and `anyOf`, `allOf`, `anythingBut` and `$or` nested freely.
+- **Expressive rules**: equals, prefix, suffix, wildcard, numeric comparisons, ranges, IP networks, `exists`, and `anyOf`, `allOf`, `anythingBut` and `$or` nested freely.
 - **No dependencies**: only the Go standard library.
 
 An event is a list of fields with their values. A rule links those fields to patterns that decide whether the event matches.
@@ -97,7 +98,7 @@ hypermatch fits wherever many rules have to be checked against a stream of event
 - **Subscriptions and notifications**: Let users subscribe to events with their own filters, for example price alerts like `{"symbol": {"equals": "ACME"}, "price": {"lt": 100}}` or "tell me about new issues labeled bug". Hundreds of thousands of subscriptions are no problem.
 - **Feature flags and targeting**: Decide from their properties which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
 - **IoT and telemetry**: Detect sensor readings outside their normal range with `between`, `lt` and `gt`, per device type or site.
-- **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths or logins from unusual places, with prefix, suffix and wildcard patterns.
+- **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths with prefix, suffix and wildcard patterns, or logins from outside your networks with `cidr`.
 - **Content-based routing**: Route orders, tickets or documents to the queues or services responsible for their content.
 
 The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions and feature targeting in code.
@@ -386,6 +387,24 @@ How it matches:
 
 - `{"exists": true}` matches if the event contains the property with at least one value, like the wildcard `*`.
 - `{"exists": false}` matches if the event does not contain the property, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
+
+### "cidr" matching
+`cidr` checks if a value is an IP address inside a network, written as a prefix such as `10.0.0.0/8` or `2001:db8::/32`. A single address such as `10.1.2.3` matches only itself.
+
+```javascript
+{
+    "source.ip": {
+        "cidr": "10.0.0.0/8"
+    }
+}
+```
+
+How it matches:
+
+- **String**: Checks if the value is an IPv4 or IPv6 address inside 10.0.0.0/8
+- **String array**: Checks if the array contains such an address
+
+IPv4 addresses written as IPv6 addresses, such as `::ffff:10.1.2.3`, count as IPv4 addresses. Values that are not IP addresses never match, and neither do addresses with a zone such as `fe80::1%eth0`. Each distinct prefix length on a path costs one hash lookup per value.
 
 ### Alternatives with "$or"
 An event matches a rule if **all** of its conditions match. `$or` adds alternatives: the rule also needs any one of the condition sets in it to match. Unlike `anyOf`, which compares the values of a single property, `$or` combines whole conditions, including conditions on different paths:

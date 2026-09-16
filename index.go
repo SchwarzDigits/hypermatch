@@ -14,19 +14,26 @@ import (
 //   - wildcard: a trie of the pattern tokens, simulated as an NFA
 //   - exists ("*"): matches whenever the property is present
 //   - numeric comparisons: sorted lists of their bounds
+//   - cidr: one hash lookup per distinct prefix length
 type valueIndex struct {
-	equals     strMap[*leaf]
-	prefixes   strMap[*leaf]
-	suffixes   strMap[*leaf]
-	prefixLens atomic.Pointer[[]int] // sorted, copied on write
-	suffixLens atomic.Pointer[[]int] // sorted, copied on write
-	glob       atomic.Pointer[globNode]
-	exists     atomic.Pointer[leaf]
-	num        atomic.Pointer[numIndex]
+	equals   strMap[*leaf]
+	prefixes strMap[*leaf]
+	suffixes strMap[*leaf]
+	lens     atomic.Pointer[lengths] // copied on write
+	glob     atomic.Pointer[globNode]
+	exists   atomic.Pointer[leaf]
+	num      atomic.Pointer[numIndex]
+	cidr     atomic.Pointer[cidrIndex]
 
 	// kinds has bit 1<<k set once the index contains a leaf of kind k, so
 	// that matching skips the structures a group does not use.
 	kinds atomic.Uint32
+}
+
+// lengths holds the distinct lengths of the prefixes and suffixes of an
+// index, sorted. They share a pointer, which keeps groups small.
+type lengths struct {
+	prefix, suffix []int
 }
 
 // add registers the leaf l for the leaf expression e. Writer only.
@@ -36,10 +43,10 @@ func (x *valueIndex) add(e *expr, l *leaf) {
 		x.equals.put(e.value, l)
 	case leafPrefix:
 		x.prefixes.put(e.value, l)
-		addLength(&x.prefixLens, len(e.value))
+		x.addLength(len(e.value), false)
 	case leafSuffix:
 		x.suffixes.put(e.value, l)
-		addLength(&x.suffixLens, len(e.value))
+		x.addLength(len(e.value), true)
 	case leafGlob:
 		root := x.glob.Load()
 		if root == nil {
@@ -55,26 +62,43 @@ func (x *valueIndex) add(e *expr, l *leaf) {
 			ni = new(numIndex)
 		}
 		x.num.Store(ni.with(parseInterval(e.value), l))
+	case leafCIDR:
+		ci := x.cidr.Load()
+		if ci == nil {
+			ci = new(cidrIndex)
+			x.cidr.Store(ci)
+		}
+		ci.add(e.value, l)
 	}
 	x.kinds.Or(1 << e.kind) // after the leaf is published
 }
 
-func addLength(lens *atomic.Pointer[[]int], n int) {
+// addLength records the length n of a prefix, or of a suffix if suffix is
+// true. Writer only.
+func (x *valueIndex) addLength(n int, suffix bool) {
+	old := x.lens.Load()
 	var cur []int
-	if p := lens.Load(); p != nil {
-		cur = *p
+	if old != nil {
+		cur = old.prefix
+		if suffix {
+			cur = old.suffix
+		}
 	}
-	if i, found := slices.BinarySearch(cur, n); !found {
-		s := slices.Insert(slices.Clone(cur), i, n)
-		lens.Store(&s)
+	i, found := slices.BinarySearch(cur, n)
+	if found {
+		return
 	}
-}
-
-func loadLengths(lens *atomic.Pointer[[]int]) []int {
-	if p := lens.Load(); p != nil {
-		return *p
+	next := new(lengths)
+	if old != nil {
+		*next = *old
 	}
-	return nil
+	grown := slices.Insert(slices.Clone(cur), i, n)
+	if suffix {
+		next.suffix = grown
+	} else {
+		next.prefix = grown
+	}
+	x.lens.Store(next)
 }
 
 // collect appends the leaves matching the folded value v, located at r, to
@@ -91,23 +115,26 @@ func (x *valueIndex) collect(v []byte, r *vref, hits []*leaf, sc *scratch, kinds
 			}
 		}
 	}
-	if kinds&(1<<leafPrefix) != 0 {
-		for _, n := range loadLengths(&x.prefixLens) {
-			if n > len(v) {
-				break
-			}
-			if l, ok := x.prefixes.getBytes(v[:n]); ok {
-				hits = append(hits, l)
+	if kinds&(1<<leafPrefix|1<<leafSuffix) != 0 {
+		lens := x.lens.Load() // stored before the kinds were set
+		if kinds&(1<<leafPrefix) != 0 {
+			for _, n := range lens.prefix {
+				if n > len(v) {
+					break
+				}
+				if l, ok := x.prefixes.getBytes(v[:n]); ok {
+					hits = append(hits, l)
+				}
 			}
 		}
-	}
-	if kinds&(1<<leafSuffix) != 0 {
-		for _, n := range loadLengths(&x.suffixLens) {
-			if n > len(v) {
-				break
-			}
-			if l, ok := x.suffixes.getBytes(v[len(v)-n:]); ok {
-				hits = append(hits, l)
+		if kinds&(1<<leafSuffix) != 0 {
+			for _, n := range lens.suffix {
+				if n > len(v) {
+					break
+				}
+				if l, ok := x.suffixes.getBytes(v[len(v)-n:]); ok {
+					hits = append(hits, l)
+				}
 			}
 		}
 	}
@@ -121,6 +148,11 @@ func (x *valueIndex) collect(v []byte, r *vref, hits []*leaf, sc *scratch, kinds
 			if f, ok := r.number(v); ok {
 				hits = ni.collect(f, hits)
 			}
+		}
+	}
+	if kinds&(1<<leafCIDR) != 0 {
+		if ci := x.cidr.Load(); ci != nil {
+			hits = ci.collect(v, hits)
 		}
 	}
 	return hits

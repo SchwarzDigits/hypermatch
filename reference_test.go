@@ -162,6 +162,13 @@ func refSatisfies(p Pattern, values []string) bool {
 			}
 		}
 		return false
+	case PatternCIDR:
+		for _, v := range values {
+			if refCIDR(p.Value, v) {
+				return true
+			}
+		}
+		return false
 	}
 	want := fold(p.Value)
 	for _, v := range values {
@@ -282,14 +289,17 @@ var (
 )
 
 func genValue(src source) string {
-	if src.intn(3) == 0 {
+	switch src.intn(5) {
+	case 0:
 		return genNumbers[src.intn(len(genNumbers))]
+	case 1:
+		return genAddresses[src.intn(len(genAddresses))]
 	}
 	return genString(src, 3)
 }
 
 func genPattern(src source, depth int) Pattern {
-	const leaves = 7
+	const leaves = 8
 	kinds := leaves + 3
 	if depth >= 2 {
 		kinds = leaves
@@ -310,6 +320,8 @@ func genPattern(src source, depth int) Pattern {
 		return genBetween(src)
 	case 6:
 		return Pattern{Type: PatternExists, Value: "true"}
+	case 7:
+		return cidrP(genPrefixes[src.intn(len(genPrefixes))])
 	default:
 		sub := make([]Pattern, 1+src.intn(3))
 		for i := range sub {

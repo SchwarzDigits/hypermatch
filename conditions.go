@@ -130,8 +130,8 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 }
 
 // Pattern defines how the values of a property are compared. The literal
-// types (equals, prefix, suffix, wildcard, lt, lte, gt, gte, eq, exists) use
-// Value, the others (anythingBut, anyOf, allOf, between) use Sub.
+// types (equals, prefix, suffix, wildcard, lt, lte, gt, gte, eq, cidr and
+// exists) use Value, the others (anythingBut, anyOf, allOf, between) use Sub.
 type Pattern struct {
 	Type  PatternType `json:"type"`
 	Value string      `json:"value,omitempty"`

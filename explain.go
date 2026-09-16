@@ -156,6 +156,10 @@ func valueMatches(p Pattern, v string) bool {
 		x, ok := parseNumber(v)
 		iv, _ := betweenInterval(&p)
 		return ok && iv.contains(x)
+	case PatternCIDR:
+		prefix, _ := parsePrefix(p.Value)
+		a, ok := parseIP([]byte(v))
+		return ok && prefix.Contains(a)
 	case PatternExists:
 		return p.Value == "true"
 	case PatternAnyOf:

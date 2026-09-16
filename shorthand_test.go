@@ -24,6 +24,7 @@ func TestShorthands(t *testing.T) {
 		{Between(GreaterThanOrEqual(500), LessThan(600)), betweenP(gteP("500"), ltP("600"))},
 		{Exists(), existsP(true)},
 		{Absent(), existsP(false)},
+		{CIDR("10.0.0.0/8"), cidrP("10.0.0.0/8")},
 	}
 	for i, tt := range tests {
 		if !reflect.DeepEqual(tt.got, tt.want) {

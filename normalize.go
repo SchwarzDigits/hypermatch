@@ -22,9 +22,10 @@ const (
 	leafGlob   // a wildcard pattern that none of the simpler kinds can express
 	leafExists // the wildcard "*", which matches any value
 	leafNumber // a numeric comparison; the value is the key of a numInterval
+	leafCIDR   // an IP prefix; the value is its canonical text
 )
 
-var leafTags = [...]byte{leafEquals: '=', leafPrefix: '^', leafSuffix: '$', leafGlob: '~', leafExists: '?', leafNumber: '#'}
+var leafTags = [...]byte{leafEquals: '=', leafPrefix: '^', leafSuffix: '$', leafGlob: '~', leafExists: '?', leafNumber: '#', leafCIDR: '@'}
 
 type exprOp uint8
 
@@ -205,6 +206,15 @@ func normalizePattern(p *Pattern) (*expr, error) {
 			return nil, err
 		}
 		return newLeaf(leafNumber, iv.key()), nil
+	case PatternCIDR:
+		if len(p.Sub) > 0 {
+			return nil, fmt.Errorf("[%s] must not contain sub-patterns", p.Type)
+		}
+		prefix, ok := parsePrefix(p.Value)
+		if !ok {
+			return nil, fmt.Errorf("[%s] must be an IP address or prefix such as 10.0.0.0/8, got %q", p.Type, p.Value)
+		}
+		return newLeaf(leafCIDR, prefix.String()), nil
 	case PatternExists:
 		if len(p.Sub) > 0 {
 			return nil, fmt.Errorf("[%s] must not contain sub-patterns", p.Type)

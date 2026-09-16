@@ -5,7 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
-- Functions that build rules in Go with less typing: `Cond`, `Or`, `Equals`, `Prefix`, `Suffix`, `Wildcard`, `AnyOf`, `AllOf`, `AnythingBut`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `NumericEquals`, `Between`, `Exists` and `Absent`.
+- Functions that build rules in Go with less typing: `Cond`, `Or`, `Equals`, `Prefix`, `Suffix`, `Wildcard`, `AnyOf`, `AllOf`, `AnythingBut`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `NumericEquals`, `Between`, `CIDR`, `Exists` and `Absent`.
+- The `cidr` pattern, which matches IPv4 and IPv6 addresses inside a network such as `10.0.0.0/8`, without allocating.
 - Runnable examples for alternatives with `$or` and for numeric patterns.
 
 ### Changed

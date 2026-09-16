@@ -3,7 +3,6 @@ package hypermatch
 import (
 	"slices"
 	"strconv"
-	"sync/atomic"
 	"testing"
 )
 
@@ -90,15 +89,16 @@ func TestList(t *testing.T) {
 }
 
 func TestLengths(t *testing.T) {
-	var lens atomic.Pointer[[]int]
-	if got := loadLengths(&lens); got != nil {
-		t.Errorf("empty lengths: %v", got)
+	var x valueIndex
+	if x.lens.Load() != nil {
+		t.Error("an empty index has lengths")
 	}
 	for _, n := range []int{5, 3, 9, 3, 1} {
-		addLength(&lens, n)
+		x.addLength(n, false)
 	}
-	if got := loadLengths(&lens); !slices.Equal(got, []int{1, 3, 5, 9}) {
-		t.Errorf("lengths = %v, want [1 3 5 9]", got)
+	x.addLength(2, true)
+	if got := x.lens.Load(); !slices.Equal(got.prefix, []int{1, 3, 5, 9}) || !slices.Equal(got.suffix, []int{2}) {
+		t.Errorf("lengths = %v and %v, want [1 3 5 9] and [2]", got.prefix, got.suffix)
 	}
 }
 

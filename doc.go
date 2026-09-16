@@ -11,6 +11,7 @@
 //   - anyOf, allOf and anythingBut combine patterns on the same path;
 //     anythingBut matches if none of the values matches any sub-pattern
 //   - lt, lte, gt, gte, eq and between compare values as numbers
+//   - cidr tests whether a value is an IP address inside a network
 //   - exists tests whether the property is present or absent
 //   - $or holds if any of the condition sets in it holds, which is the only
 //     way to combine alternatives on different paths

@@ -29,6 +29,7 @@ const (
 	PatternBetween            // "between": a single value satisfies the lower and the upper bound in Sub
 	PatternExists             // "exists": the property is present (Value "true") or absent (Value "false")
 	PatternNumericEquals      // "eq": a value is a number equal to Value, in any notation
+	PatternCIDR               // "cidr": a value is an IP address inside the prefix in Value
 )
 
 // AllValues returns all valid pattern types.
@@ -36,7 +37,7 @@ func (p PatternType) AllValues() []PatternType {
 	return []PatternType{PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard,
 		PatternAnythingBut, PatternAnyOf, PatternAllOf,
 		PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual,
-		PatternBetween, PatternExists, PatternNumericEquals}
+		PatternBetween, PatternExists, PatternNumericEquals, PatternCIDR}
 }
 
 // HasLiteralValue reports whether patterns of type p use Value rather than
@@ -45,7 +46,7 @@ func (p PatternType) HasLiteralValue() bool {
 	switch p {
 	case PatternEquals, PatternPrefix, PatternSuffix, PatternWildcard,
 		PatternLessThan, PatternLessThanOrEqual, PatternGreaterThan, PatternGreaterThanOrEqual,
-		PatternExists, PatternNumericEquals:
+		PatternExists, PatternNumericEquals, PatternCIDR:
 		return true
 	default:
 		return false
@@ -97,6 +98,8 @@ func (p PatternType) String() string {
 		return "exists"
 	case PatternNumericEquals:
 		return "eq"
+	case PatternCIDR:
+		return "cidr"
 	default:
 		return ""
 	}
@@ -134,6 +137,8 @@ func PatternTypeFromString(input string) PatternType {
 		return PatternExists
 	case "eq":
 		return PatternNumericEquals
+	case "cidr":
+		return PatternCIDR
 	}
 	return PatternUnknown
 }

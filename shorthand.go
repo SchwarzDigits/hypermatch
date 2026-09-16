@@ -106,6 +106,12 @@ func Absent() Pattern {
 	return Pattern{Type: PatternExists, Value: "false"}
 }
 
+// CIDR returns a pattern that matches IP addresses inside prefix, such as
+// 10.0.0.0/8 or 2001:db8::/32. A single address matches only itself.
+func CIDR(prefix string) Pattern {
+	return Pattern{Type: PatternCIDR, Value: prefix}
+}
+
 func number(t PatternType, v float64) Pattern {
 	return Pattern{Type: t, Value: strconv.FormatFloat(v, 'g', -1, 64)}
 }
