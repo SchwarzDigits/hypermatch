@@ -9,6 +9,15 @@
 
 ![hypermatch logo](./logo/logo-small.png)
 
+# What's new in v2.2 ✨
+
+- 🔢 **Numbers, exactly**: `{"eq": 500}` matches `500`, `500.0` and `5e2`. Ranges and single numbers are found by binary search, so 10,000 price bands or thresholds on one path take 130 ns per event instead of 3.3 µs.
+- 🧩 **Alternatives in one rule**: `$or` combines whole conditions, including conditions on different paths. Rules are expanded when they are added, so matching them costs nothing extra.
+- ✳️ **Literal asterisks**: in wildcard patterns, `\*` matches a `*` and `\\` a `\`.
+- 🔍 **Explanations for user interfaces**: `Explanation` encodes to JSON with a result for every condition, sub-pattern and alternative.
+
+Matching, memory per rule and adding rules are as fast as before, checked with A/B benchmarks for every change.
+
 # What's new in v2 🚀
 
 hypermatch v2 has a brand-new matching engine:
