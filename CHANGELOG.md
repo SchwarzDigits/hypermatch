@@ -4,8 +4,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-16
+
+### Added
+- Functions that build rules in Go with less typing: `Cond`, `Or`, `Equals`, `Prefix`, `Suffix`, `Wildcard`, `AnyOf`, `AllOf`, `AnythingBut`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `NumericEquals`, `Between`, `CIDR`, `Exists` and `Absent`.
+- The `cidr` pattern, which matches IPv4 and IPv6 addresses inside a network such as `10.0.0.0/8`, without allocating.
+- Wildcard paths: a condition on a path ending in `.*`, such as `labels.*`, looks at the values of all paths that begin with `labels.`, as if they were one property.
+- Runnable examples for alternatives with `$or`, for numeric patterns, and for security logs with `cidr` and wildcard paths.
+
 ### Changed
+- Condition paths ending in `.*` are wildcard paths. Before, they matched only properties with exactly that path, which they still match.
 - Conditions are evaluated against a set of the leaves that matched, instead of searching a sorted list of them. Rule sets with many different `anythingBut` conditions on the same path match up to about twice as fast, and the set is only built for conditions that need it.
+- `anythingBut` conditions that consist of plain patterns such as `equals`, `prefix` or `lt`, also inside `anyOf`, are no longer evaluated one by one. Instead, the values of an event mark the conditions they rule out. Rule sets with many such conditions on the same path, most of which fail, match about twice as fast.
 
 ## [2.2.0] - 2026-09-16
 
@@ -67,7 +77,8 @@ The matching engine has been rewritten for correctness, speed and concurrent use
 ### Removed
 - The dependency on `gotest.tools`.
 
-[Unreleased]: https://github.com/SchwarzDigits/hypermatch/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/SchwarzDigits/hypermatch/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.3.0
 [2.2.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.2.0
 [2.1.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.1.0
 [2.0.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.0.0

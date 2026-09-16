@@ -16,12 +16,13 @@ v2 is a new matching engine, and everything below came with it:
 - 🔒 **Lock-free matching**: `Match` never blocks and scales with the number of cores, even while rules are added, replaced or removed.
 - 🪶 **Lean**: a rule takes a few hundred bytes, `Match` allocates only the slice it returns, and `AppendMatches` nothing at all. No dependencies.
 - ✅ **Precise**: every pattern type follows precisely specified semantics, checked continuously against a reference implementation with differential tests, fuzzing and race tests.
-- ✨ **Modern API**: generic rule identifiers, validation errors that point at the problem, and results in the order the rules were added.
+- ✨ **Modern API**: generic rule identifiers, short helpers such as `Equals`, `AnyOf` and `Or` for rules written in Go, validation errors that point at the problem, and results in the order the rules were added.
 - 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly and decodes only the values your rules refer to, several times as fast as decoding them first.
 - 🔄 **Live rule updates**: `AddRule`, `ReplaceRule` and `RemoveRule` change the rules at run time. Replacing is atomic, and nothing ever blocks `Match`.
 - 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` tests whether a field is there at all, and thousands of ranges on one field are found by binary search.
+- 🌐 **IP networks**: `cidr` matches IPv4 and IPv6 addresses against networks such as `10.0.0.0/8`, without allocating.
 - 🧩 **Real logic**: `anyOf`, `allOf` and `anythingBut` nest as deeply as you like, and `$or` combines whole conditions, including conditions on different fields.
-- ✳️ **Wildcards**: `*` anywhere in a pattern, and `\*` for a literal asterisk.
+- ✳️ **Wildcards**: `*` anywhere in a pattern, `\*` for a literal asterisk, and paths such as `labels.*` that look at all fields below `labels`.
 - 🎯 **Routing**: `MatchFirst` returns only the first matching rule, the one added earliest, and skips everything that cannot come before it. Add the rules in the order they should win, and it routes.
 - 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not, as text or as JSON for a user interface.
 - 🏁 **Ahead of the field**: on the same 100,000 rules and the same JSON events, hypermatch matches about 5 times as many events per second as [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, and about 45 times as many as [quamina](https://github.com/timbray/quamina), with a fraction of the memory per rule. Rules with wildcards, which slow both of them down to a crawl, are where hypermatch pulls furthest ahead. See the [comparison](#performance).
@@ -36,7 +37,7 @@ hypermatch matches events against large sets of rules, in Go. Rules are compiled
 - **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are added, replaced or removed.
 - **Correct**: the matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
 - **Readable rules**: write them in Go or as plain JSON objects.
-- **Expressive rules**: equals, prefix, suffix, wildcard, numeric comparisons, ranges, `exists`, and `anyOf`, `allOf`, `anythingBut` and `$or` nested freely.
+- **Expressive rules**: equals, prefix, suffix, wildcard, numeric comparisons, ranges, IP networks, `exists`, and `anyOf`, `allOf`, `anythingBut` and `$or` nested freely.
 - **No dependencies**: only the Go standard library.
 
 An event is a list of fields with their values. A rule links those fields to patterns that decide whether the event matches.
@@ -55,7 +56,7 @@ hypermatch requires Go 1.24 or later.
 
 ```go
 import (
-    "log"
+    "fmt"
 
     "github.com/SchwarzDigits/hypermatch/v2"
 )
@@ -64,29 +65,29 @@ func main() {
     // Rules are identified by values of any comparable type, here strings.
     hm := hypermatch.New[string]()
 
-    // Add a rule
-    if err := hm.AddRule("markus_rule", hypermatch.ConditionSet{
-        {Path: "firstname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "markus"}},
-        {Path: "lastname", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "troßbach"}},
-    }); err != nil {
+    // An event matches a rule if it matches all of its conditions.
+    err := hm.AddRule("page-shop-team", hypermatch.ConditionSet{
+        hypermatch.Cond("team", hypermatch.Equals("shop")),
+        hypermatch.Cond("severity", hypermatch.AnyOf(hypermatch.Equals("critical"), hypermatch.Equals("warning"))),
+        hypermatch.Cond("latency_ms", hypermatch.GreaterThan(500)),
+    })
+    if err != nil {
         panic(err)
     }
 
-    // Test with match
-    matchedRules := hm.Match([]hypermatch.Property{
-        {Path: "firstname", Values: []string{"markus"}},
-        {Path: "lastname", Values: []string{"troßbach"}},
-    })
-    log.Printf("Following rules match: %v", matchedRules) // [markus_rule]
+    // Match events given as Go values...
+    fmt.Println(hm.Match([]hypermatch.Property{
+        {Path: "team", Values: []string{"shop"}},
+        {Path: "severity", Values: []string{"CRITICAL"}},
+        {Path: "latency_ms", Values: []string{"750"}},
+    })) // [page-shop-team]
 
-    // Test without match
-    matchedRules = hm.Match([]hypermatch.Property{
-        {Path: "firstname", Values: []string{"john"}},
-        {Path: "lastname", Values: []string{"doe"}},
-    })
-    log.Printf("Following rules match: %v", matchedRules) // []
+    // ...or as JSON.
+    fmt.Println(hm.MatchJSON([]byte(`{"team": "search", "severity": "critical", "latency_ms": 750}`))) // [] <nil>
 }
 ```
+
+`Cond`, `Equals`, `AnyOf` and their siblings only fill in the structs, so `hypermatch.Cond("team", hypermatch.Equals("shop"))` is the same as `hypermatch.Condition{Path: "team", Pattern: hypermatch.Pattern{Type: hypermatch.PatternEquals, Value: "shop"}}`. Rules can also be written as JSON, see [Matching Basics](#matching-basics).
 
 # Use Cases
 
@@ -97,10 +98,10 @@ hypermatch fits wherever many rules have to be checked against a stream of event
 - **Subscriptions and notifications**: Let users subscribe to events with their own filters, for example price alerts like `{"symbol": {"equals": "ACME"}, "price": {"lt": 100}}` or "tell me about new issues labeled bug". Hundreds of thousands of subscriptions are no problem.
 - **Feature flags and targeting**: Decide from their properties which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
 - **IoT and telemetry**: Detect sensor readings outside their normal range with `between`, `lt` and `gt`, per device type or site.
-- **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths or logins from unusual places, with prefix, suffix and wildcard patterns.
+- **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths with prefix, suffix and wildcard patterns, or logins from outside your networks with `cidr`.
 - **Content-based routing**: Route orders, tickets or documents to the queues or services responsible for their content.
 
-The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions and feature targeting in code.
+The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions, feature targeting and security logs in code.
 
 # Documentation
 ## Which Method to Use
@@ -163,40 +164,16 @@ These rules hold for every condition:
 - **Supported Types**: Values are strings or string arrays.
 - **Missing Properties**: A condition never matches a property that is absent from the event, except for `{"exists": false}`. This includes `anythingBut`. A property without values counts as absent.
 - **Repeated Paths**: Several properties with the same path in an event act as one property with all their values. Several conditions on the same path in a rule must all match, just like `allOf`.
+- **Wildcard Paths**: A path ending in `.*`, such as `labels.*`, looks at the values of all paths that begin with `labels.`, as if they were one property. See [Wildcard paths](#wildcard-paths).
 
 Here’s an example rule that matches the event above:
 
 ```go
-ConditionSet{
-    {
-        Path: "status",
-        Pattern: Pattern{Type: PatternEquals, Value: "firing"},
-    },
-    {
-        Path: "name",
-        Pattern: Pattern{Type: PatternAnythingBut, Sub: []Pattern{
-                {Type: PatternWildcard, Value: "TEST*"},
-            },
-        },
-    },
-    {
-        Path: "severity",
-        Pattern: Pattern{ Type: PatternAnyOf,
-            Sub: []Pattern{
-                {Type: PatternEquals, Value: "critical"},
-                {Type: PatternEquals, Value: "warning"},
-            },
-        },
-    },
-    {
-        Path: "tags",
-        Pattern: Pattern{ Type: PatternAllOf,
-            Sub: []Pattern{
-                {Type: PatternEquals, Value: "shop"},
-                {Type: PatternEquals, Value: "backend"},
-            },
-        },
-    },
+hypermatch.ConditionSet{
+    hypermatch.Cond("status", hypermatch.Equals("firing")),
+    hypermatch.Cond("name", hypermatch.AnythingBut(hypermatch.Wildcard("TEST*"))),
+    hypermatch.Cond("severity", hypermatch.AnyOf(hypermatch.Equals("critical"), hypermatch.Equals("warning"))),
+    hypermatch.Cond("tags", hypermatch.AllOf(hypermatch.Equals("shop"), hypermatch.Equals("backend"))),
 }
 ```
 
@@ -412,6 +389,24 @@ How it matches:
 - `{"exists": true}` matches if the event contains the property with at least one value, like the wildcard `*`.
 - `{"exists": false}` matches if the event does not contain the property, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
 
+### "cidr" matching
+`cidr` checks if a value is an IP address inside a network, written as a prefix such as `10.0.0.0/8` or `2001:db8::/32`. A single address such as `10.1.2.3` matches only itself.
+
+```javascript
+{
+    "source.ip": {
+        "cidr": "10.0.0.0/8"
+    }
+}
+```
+
+How it matches:
+
+- **String**: Checks if the value is an IPv4 or IPv6 address inside 10.0.0.0/8
+- **String array**: Checks if the array contains such an address
+
+IPv4 addresses written as IPv6 addresses, such as `::ffff:10.1.2.3`, count as IPv4 addresses. Values that are not IP addresses never match, and neither do addresses with a zone such as `fe80::1%eth0`. Each distinct prefix length on a path costs one hash lookup per value.
+
 ### Alternatives with "$or"
 An event matches a rule if **all** of its conditions match. `$or` adds alternatives: the rule also needs any one of the condition sets in it to match. Unlike `anyOf`, which compares the values of a single property, `$or` combines whole conditions, including conditions on different paths:
 
@@ -431,6 +426,21 @@ This rule matches production events that either belong to the shop team or are e
 - In Go, `$or` is the `Or` field of a `Condition`, which holds the alternative condition sets.
 - Rules with `$or` are expanded into their combinations when they are added, so matching them costs nothing extra. A rule that combines into more than 1,024 condition sets is rejected.
 - A key `"$or"` whose value is an object is an ordinary condition on the path `$or`.
+
+### Wildcard paths
+A path that ends in `.*` looks at all fields below a field. This helps with maps whose keys are not known in advance, such as labels or annotations:
+
+```javascript
+{
+    "labels.*": {
+        "equals": "production"
+    }
+}
+```
+
+The rule matches `{"labels": {"env": "production"}}` as well as `{"labels": {"stage": "production"}}` and `{"labels": {"eu": {"stage": "production"}}}`. The values of all paths that begin with `labels.` count as the values of one property, so `anythingBut` holds only if none of them matches, and `{"exists": false}` only if there are none. The path `labels` itself is not below `labels.*`.
+
+Only a final `*` after a `.` makes a wildcard path: `labels.*.env` and `*` are ordinary paths. Once rules use wildcard paths, matching looks up the part before every `.` in the paths of an event.
 
 ## Rule Identifiers
 
@@ -541,7 +551,7 @@ For a user interface, the `Explanation` holds the same information in fields and
 
 # Performance
 
-On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and how long it takes hardly depends on the number of rules. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. Absolute times belong to the machine they were measured on: these are medians of five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and how long it takes hardly depends on the number of rules. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. Absolute times belong to the machine they were measured on: these are medians of at least five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
 
 | Workload | Rules | Time per event | Events per second |
 |---|---|---:|---:|
@@ -551,13 +561,16 @@ On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and ho
 | wildcard | A different `*-appN-*` wildcard per rule | 0.34 µs | 2.9 million |
 | prefix | A different URL prefix per rule | 0.20 µs | 4.9 million |
 | numeric | 10 latency thresholds per service; 6 rules match each event | 0.34 µs | 2.9 million |
-| anythingbut | 100 exclusion rules per service; 99 match each event | 3.78 µs | 260,000 |
+| cidr | A different network per rule, as a /28 or /30 prefix | 0.15 µs | 6.8 million |
+| labels | 10 rules per service, each looking for a value among all labels with `labels.*` | 0.23 µs | 4.3 million |
+| anythingbut | 100 exclusion rules per service; 99 match each event | 3.75 µs | 270,000 |
+| anythingbut-miss | 100 exclusion rules per service; all of them fail for each event | 0.24 µs | 4.1 million |
 
 - **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload reaches 14 million events per second.
 - **Allocations**: `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all.
 - **JSON events**: `MatchJSON` matches the events of the mixed workload, given as JSON, in 0.65 µs. That is 3.5 times as fast as `json.Unmarshal` followed by `Match` (2.27 µs).
 - **Memory**: A rule takes 301 to 447 bytes.
-- **Adding rules**: Adding 10,000 rules takes 4 to 10 ms.
+- **Adding rules**: Adding 10,000 rules takes 4 to 11 ms.
 
 The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch, [quamina](https://github.com/timbray/quamina) and [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, on a single core. The rules combine `equals`, `anythingBut` and `anyOf` conditions, and every event matches ten of them. With `MatchJSON`, hypermatch gets exactly the same JSON documents as the other two:
 
@@ -575,7 +588,7 @@ Wildcard patterns are the special case where the distance is largest. With a wil
 Things to consider to get maximum performance:
 - Rules that share conditions are evaluated together. Conditions are ordered by path, so conditions on alphabetically early paths that many rules have in common, such as `"env": {"equals": "prod"}`, are checked only once per event.
 - `equals`, `prefix`, `suffix` and wildcards of the form `abc*` or `*abc` are hash lookups. Other wildcards run through an automaton, which is still fast, but costs a little more.
-- `anythingBut` conditions are checked for every event that contains their path. Many *different* `anythingBut` conditions at the same position therefore cost time proportional to their number.
+- `anythingBut` conditions are checked for every event that contains their path. If they consist of plain patterns such as `equals`, `prefix` or `lt`, also inside `anyOf`, the values of the event rule them out at once. Others, for example with `allOf` inside, are evaluated one by one, so many *different* ones at the same position cost time proportional to their number.
 - Reuse result slices with `AppendMatches`.
 
 # Migrating from v1

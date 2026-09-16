@@ -3,7 +3,9 @@ package hypermatch
 import (
 	"cmp"
 	"hash/maphash"
+	"math/bits"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -16,13 +18,31 @@ import (
 
 type trie struct {
 	root      state
-	paths     strMap[string]   // the path of every condition, for MatchJSON
-	prefixes  strMap[struct{}] // the parts of these paths before each "."
-	hasAbsent atomic.Bool      // some condition is {"exists": false}
-	edgeSeq   uint64           // writer only
+	paths     strMap[string]    // the path of every condition, for MatchJSON
+	prefixes  strMap[struct{}]  // the parts of these paths before each "."
+	wilds     strMap[*wildPath] // the paths ending in ".*", by the part before
+	hasAbsent atomic.Bool       // some condition is {"exists": false}
+	edgeSeq   uint64            // writer only
 }
 
-// addPath records path and its prefixes for MatchJSON. Writer only.
+// wildPath is a condition path such as "labels.*", which refers to the
+// values of all paths that begin with "labels.".
+type wildPath struct {
+	path string
+	hash uint64 // of path
+}
+
+// wildBase returns the part of path before its final ".*", and whether
+// path is a wildcard path. The path ".*" is not: it has no part before.
+func wildBase(path string) (string, bool) {
+	if len(path) > 2 && strings.HasSuffix(path, ".*") {
+		return path[:len(path)-2], true
+	}
+	return "", false
+}
+
+// addPath records path and its prefixes, for MatchJSON, and wildcard paths,
+// for all Match calls. Writer only.
 func (t *trie) addPath(path string) {
 	if _, ok := t.paths.get(path); ok {
 		return
@@ -33,6 +53,9 @@ func (t *trie) addPath(path string) {
 				t.prefixes.put(path[:i], struct{}{})
 			}
 		}
+	}
+	if base, ok := wildBase(path); ok {
+		t.wilds.put(base, &wildPath{path: path, hash: maphash.String(hashSeed, path)})
 	}
 	t.paths.put(path, path)
 }
@@ -107,9 +130,11 @@ type keyed struct {
 
 // leaf is a single-value pattern: equals, prefix, suffix or wildcard. Most
 // leaves belong to a single condition, which is therefore stored inline.
+// The conditions registered at a leaf are the monotone conditions that may
+// hold when it matches, and the negations it refutes.
 type leaf struct {
 	id   uint32               // index in group.leaves
-	edge atomic.Pointer[edge] // first monotone condition that may hold when this leaf matches
+	edge atomic.Pointer[edge] // first condition registered here
 	more list[*edge]          // further such conditions
 }
 
@@ -133,9 +158,23 @@ func (l *leaf) appendEdges(dst []*edge) []*edge {
 
 // edge is a condition leading to the next state.
 type edge struct {
-	id   uint64
+	id   uint64   // sequence number, and for a negation index, its position in group.neg
 	f    *formula // nil if the condition holds whenever a leaf it is registered at matches
 	next *state
+}
+
+// A negation that holds exactly if none of some leaves matches, such as
+// {"anythingBut": [{"equals": "a"}, {"equals": "b"}]}, is registered at
+// these leaves, which refute it, and its id carries 1 + its position in
+// group.neg above negShift. Matching then marks the refuted negations
+// instead of evaluating all of them. The sequence numbers below negShift
+// never run out, since every edge takes memory.
+const negShift = 40
+
+// negIndex returns 1 + the position of e in group.neg if the leaves e is
+// registered at refute it, or 0.
+func (e *edge) negIndex() uint64 {
+	return e.id >> negShift
 }
 
 // formula is the compiled form of an expr over the leaves of a group.
@@ -170,6 +209,26 @@ func (f *formula) eval(hits []uint64) bool {
 	default:
 		return !f.subs[0].eval(hits)
 	}
+}
+
+// refutable reports whether f holds exactly if none of some leaves matches:
+// whether it is the negation of a leaf or of any of several leaves.
+func (f *formula) refutable() bool {
+	if f.op != opNot {
+		return false
+	}
+	switch sub := &f.subs[0]; sub.op {
+	case opLeaf:
+		return true
+	case opAnyOf:
+		for i := range sub.subs {
+			if sub.subs[i].op != opLeaf {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // triggers returns leaves such that the monotone formula f can only hold if
@@ -242,6 +301,17 @@ func (t *trie) follow(s *state, c condition) *state {
 			g.leaves[id].addEdge(e)
 		}
 	} else {
+		if n := uint64(len(g.neg.load())) + 1; n < 1<<(64-negShift) && f.refutable() {
+			// Registered before the negation is published, see evalGroup.
+			e.id |= n << negShift
+			if sub := &f.subs[0]; sub.op == opLeaf {
+				g.leaves[sub.leaf].addEdge(e)
+			} else {
+				for i := range sub.subs {
+					g.leaves[sub.subs[i].leaf].addEdge(e)
+				}
+			}
+		}
 		g.neg.add(e)
 	}
 	return e.next
@@ -338,6 +408,7 @@ type scratch struct {
 	frefs    []vref
 	hits     []*leaf
 	bits     []uint64 // the ids of hits as a set, for the formulas
+	refuted  []uint64 // the positions of the refuted negations as a set
 	edges    []*edge  // stack of edges to follow
 	out      []uint32
 	globCur  []*globNode
@@ -356,9 +427,10 @@ type scratch struct {
 	bestKey uint32 // its order key, or math.MaxUint32 if none was found
 
 	// MatchJSON only.
-	jvals []jval // values found, before they are grouped into spans
-	pbuf  []byte // path of the current JSON value
-	jtmp  []byte // decoded strings that are not needed
+	jvals []jval     // values found, before they are grouped into spans
+	pbuf  []byte     // path of the current JSON value
+	jtmp  []byte     // decoded strings that are not needed
+	jwild []openWild // the wildcard paths the current JSON value is below
 }
 
 // property is an event property with at least one value.
@@ -399,7 +471,8 @@ func (r *vref) number(v []byte) (float64, bool) {
 
 var scratchPool = sync.Pool{New: func() any { return new(scratch) }}
 
-func (sc *scratch) reset(event []Property) {
+// reset prepares sc for matching event against the rules of t.
+func (sc *scratch) reset(event []Property, t *trie) {
 	sc.props = sc.props[:0]
 	sc.spans = sc.spans[:0]
 	size := 8
@@ -408,6 +481,7 @@ func (sc *scratch) reset(event []Property) {
 	}
 	sc.initSlots(size)
 	mask := uint64(size - 1)
+	wilds := t.wilds.t.Load() // nil unless a rule has a wildcard path
 	for i := range event {
 		p := &event[i]
 		if len(p.Values) == 0 {
@@ -429,11 +503,39 @@ func (sc *scratch) reset(event []Property) {
 				break
 			}
 		}
+		if wilds != nil {
+			sc.addWild(wilds, p)
+			mask = uint64(len(sc.slots) - 1) // the table may have grown
+		}
 	}
 	sc.fbuf = sc.fbuf[:0]
 	sc.frefs = sc.frefs[:0]
 	sc.out = sc.out[:0]
 	sc.first = false
+}
+
+// addWild adds the values of p to the spans of the wildcard paths p is
+// below. If p has a wildcard path itself, its own span already holds them.
+func (sc *scratch) addWild(wilds *strTable[*wildPath], p *Property) {
+	for i := 0; i < len(p.Path); i++ {
+		if p.Path[i] != '.' {
+			continue
+		}
+		base := p.Path[:i]
+		w, ok := wilds.lookup(maphash.String(hashSeed, base), base)
+		if !ok || w.path == p.Path {
+			continue
+		}
+		idx := len(sc.props)
+		sc.props = append(sc.props, property{values: p.Values, next: -1})
+		sp := &sc.spans[sc.jsonSpan(w.path, w.hash)]
+		if sp.first < 0 {
+			sp.first, sp.folded = idx, false // new: its values are not folded yet
+		} else {
+			sc.props[sp.last].next = idx
+		}
+		sp.last = idx
+	}
 }
 
 // visible reports whether rule n is one of the rules this call matches.
@@ -495,6 +597,7 @@ func (sc *scratch) release() {
 	// Do not retain the caller's strings or old tables.
 	clear(sc.props)
 	clear(sc.spans)
+	clear(sc.jwild[:cap(sc.jwild)])
 	sc.removed, sc.meta = nil, nil
 	if cap(sc.out) > 1<<16 || cap(sc.fbuf) > 1<<20 {
 		return // let oversized buffers be collected
@@ -554,18 +657,28 @@ func (sc *scratch) visit(s *state) {
 	}
 }
 
+// refutedSet returns an empty set for n negations. The caller empties it
+// again.
+func (sc *scratch) refutedSet(n int) []uint64 {
+	words := (n + 63) / 64
+	if cap(sc.refuted) < words {
+		sc.refuted = make([]uint64, words)
+	}
+	return sc.refuted[:words]
+}
+
 // hitBits returns the ids of hits, which are sorted, as a set. The caller
 // clears the words it touched again, so the buffer starts out empty.
 func (sc *scratch) hitBits(hits []*leaf) []uint64 {
-	bits := sc.bits
-	if words := int(hits[len(hits)-1].id>>6) + 1; words > len(bits) {
-		bits = append(bits, make([]uint64, words-len(bits))...)
-		sc.bits = bits
+	set := sc.bits
+	if words := int(hits[len(hits)-1].id>>6) + 1; words > len(set) {
+		set = append(set, make([]uint64, words-len(set))...)
+		sc.bits = set
 	}
 	for _, l := range hits {
-		bits[l.id>>6] |= 1 << (l.id & 63)
+		set[l.id>>6] |= 1 << (l.id & 63)
 	}
-	return bits
+	return set
 }
 
 func (sc *scratch) evalGroup(g *group, sp *span) {
@@ -627,6 +740,25 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 	for _, l := range hits {
 		sc.edges = l.appendEdges(sc.edges)
 	}
+	var refuted []uint64
+	if len(neg) > 0 {
+		// Mark the negations the hits refute, and drop them from the
+		// candidates. Negations published after neg was loaded are left
+		// out: their positions lie beyond it.
+		refuted = sc.refutedSet(len(neg))
+		n := start
+		for _, e := range sc.edges[start:] {
+			if k := e.negIndex(); k != 0 {
+				if k <= uint64(len(neg)) {
+					refuted[(k-1)>>6] |= 1 << ((k - 1) & 63)
+				}
+				continue
+			}
+			sc.edges[n] = e
+			n++
+		}
+		sc.edges = sc.edges[:n]
+	}
 	if len(sc.edges)-start > 1 {
 		cand := sc.edges[start:]
 		slices.SortFunc(cand, func(a, b *edge) int { return cmp.Compare(a.id, b.id) })
@@ -635,7 +767,7 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 
 	// Formulas ask which leaves matched, as a set of their ids. Most groups
 	// have no formula at all, so the set is only built once one needs it.
-	var bits []uint64
+	var set []uint64
 	n := start
 	for _, e := range sc.edges[start:] {
 		if e.f == nil {
@@ -643,28 +775,40 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 			n++
 			continue
 		}
-		if bits == nil && len(hits) > 0 {
-			bits = sc.hitBits(hits)
+		if set == nil && len(hits) > 0 {
+			set = sc.hitBits(hits)
 		}
-		if e.f.eval(bits) {
+		if e.f.eval(set) {
 			sc.edges[n] = e
 			n++
 		}
 	}
 	sc.edges = sc.edges[:n]
-	if len(neg) > 0 {
-		if bits == nil && len(hits) > 0 {
-			bits = sc.hitBits(hits)
+	for w := range refuted {
+		// The negations that are not refuted hold, unless they need their
+		// formula to tell.
+		open := ^refuted[w]
+		refuted[w] = 0
+		if rest := len(neg) - w*64; rest < 64 {
+			open &= 1<<rest - 1
 		}
-		for _, e := range neg {
-			if e.f.eval(bits) {
-				sc.edges = append(sc.edges, e)
+		for open != 0 {
+			e := neg[w*64+bits.TrailingZeros64(open)]
+			open &= open - 1
+			if e.negIndex() == 0 {
+				if set == nil && len(hits) > 0 {
+					set = sc.hitBits(hits)
+				}
+				if !e.f.eval(set) {
+					continue
+				}
 			}
+			sc.edges = append(sc.edges, e)
 		}
 	}
-	if bits != nil {
+	if set != nil {
 		for _, l := range hits {
-			bits[l.id>>6] = 0
+			set[l.id>>6] = 0
 		}
 	}
 	end := len(sc.edges)

@@ -168,8 +168,8 @@ func jsonProperties(data []byte) ([]Property, bool) {
 }
 
 var (
-	jsonKeys      = []string{"a", "b", "c", "A", "a.b", ""}
-	jsonRulePaths = []string{"a", "b", "c", "A", "a.b", "b.a", ".a", "a.a.b"}
+	jsonKeys      = []string{"a", "b", "c", "A", "a.b", "", "*", ".b"}
+	jsonRulePaths = []string{"a", "b", "c", "A", "a.b", "b.a", ".a", "a.a.b", "a.*", "a.b.*", "b.*", ".*", "..*", "a.*.*", "a..*"}
 	jsonNumbers   = []string{"0", "-1", "42", "1.5", "1E3", "-0.25e-2", "500"}
 	jsonEscapes   = []string{`"Ab"`, `"ä"`, `"😀"`, `"\ud800x"`, `"a\/b\n"`, `"\uDC00\ud800􏿿"`}
 )
@@ -296,4 +296,38 @@ func FuzzMatchJSON(f *testing.F) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// TestMatchJSONWideEvent matches events with more paths than the table of
+// spans starts with, so that it grows, and repeats a path afterwards.
+func TestMatchJSONWideEvent(t *testing.T) {
+	for _, paths := range []int{8, 9, 17, 40, 300} {
+		h := New[int]()
+		for i := range paths {
+			mustAdd(t, h, i, cond(fmt.Sprintf("f%d", i), equalsP(fmt.Sprintf("v%d", i))))
+		}
+		mustAdd(t, h, paths, cond("f0", equalsP("late")))
+		mustAdd(t, h, paths+1, cond("n.deep", equalsP("x")))
+		var b strings.Builder
+		b.WriteString("{")
+		for i := range paths {
+			fmt.Fprintf(&b, `"f%d": "v%d", `, i, i)
+		}
+		b.WriteString(`"n": {"deep": "x"}, "f0": "late"}`)
+		data := []byte(b.String())
+		got, err := h.MatchJSON(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := make([]int, paths+2)
+		for i := range want {
+			want[i] = i
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%d paths: MatchJSON = %v, want %v", paths, got, want)
+		}
+		if err := checkMatchJSON(h, data); err != nil {
+			t.Fatalf("%d paths: %v", paths, err)
+		}
+	}
 }

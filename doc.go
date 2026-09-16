@@ -11,12 +11,14 @@
 //   - anyOf, allOf and anythingBut combine patterns on the same path;
 //     anythingBut matches if none of the values matches any sub-pattern
 //   - lt, lte, gt, gte, eq and between compare values as numbers
+//   - cidr tests whether a value is an IP address inside a network
 //   - exists tests whether the property is present or absent
 //   - $or holds if any of the condition sets in it holds, which is the only
 //     way to combine alternatives on different paths
 //
 // Except for {"exists": false}, a condition never matches a property that
-// is absent from the event.
+// is absent from the event. A condition on a path ending in ".*", such as
+// "labels.*", looks at the values of all paths that begin with "labels.".
 //
 // Rules are compiled into a trie of shared conditions backed by hash and
 // automaton indexes, so the cost of matching an event depends on the event

@@ -288,7 +288,7 @@ func (h *HyperMatch[T]) AppendMatches(dst []T, event []Property) []T {
 	}
 	sc := scratchPool.Get().(*scratch)
 	ids := tab.begin(sc)
-	sc.reset(event)
+	sc.reset(event, &tab.trie)
 	sc.visit(&tab.root) // even without properties: conditions may require absent ones
 	dst = tab.results(dst, sc, ids)
 	sc.release()
@@ -307,7 +307,7 @@ func (h *HyperMatch[T]) MatchFirst(event []Property) (id T, ok bool) {
 	}
 	sc := scratchPool.Get().(*scratch)
 	ids := tab.begin(sc)
-	sc.reset(event)
+	sc.reset(event, &tab.trie)
 	sc.first, sc.bestKey = true, math.MaxUint32
 	sc.visit(&tab.root)
 	if sc.bestKey != math.MaxUint32 {
