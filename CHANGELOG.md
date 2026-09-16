@@ -4,16 +4,19 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-16
+
 ### Added
 - `$or` holds if any of the condition sets in it holds, which combines alternatives on different paths in a single rule. In Go it is the `Or` field of a `Condition`. Rules with `$or` are expanded when they are added, so matching them costs nothing extra.
 - The numeric pattern `eq`, which matches numbers equal to its value in any notation, such as `500`, `500.0` and `5e2`.
-- `ConditionResult.Absent` reports whether the event has no value at the path of a condition.
 - In wildcard patterns, `\*` matches a literal `*` and `\\` a literal `\`.
+- `Explanation` reports more: `ConditionResult.Matched` says whether a condition holds, `ConditionResult.Absent` whether the event has no value at its path, and `ConditionResult.Or` holds one explanation per alternative of a `$or`.
 
 ### Changed
 - In wildcard patterns, a backslash must be followed by `*` or `\`: wildcard patterns with other backslashes are rejected, and patterns containing `\*` or `\\` match differently than before.
 - `between` and `eq` patterns are found by binary search. Many of them on the same path no longer slow matching down.
 - The JSON form of `Explanation` uses lower camel case field names and omits empty fields, which makes it easy to use in user interfaces.
+- The comparison benchmark also measures [AWS Event Ruler](https://github.com/aws/event-ruler) and how much memory a rule takes.
 
 ## [2.1.0] - 2026-09-15
 
@@ -61,6 +64,7 @@ The matching engine has been rewritten for correctness, speed and concurrent use
 ### Removed
 - The dependency on `gotest.tools`.
 
-[Unreleased]: https://github.com/SchwarzDigits/hypermatch/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/SchwarzDigits/hypermatch/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.2.0
 [2.1.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.1.0
 [2.0.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.0.0
