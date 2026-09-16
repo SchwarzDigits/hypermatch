@@ -374,7 +374,8 @@ func plainWildcardLeaf(v string) *expr {
 }
 
 // wildcardLeaf returns the cheapest leaf equivalent to the folded wildcard
-// pattern v, whose literal parts are parts.
+// pattern v, which contains escapes, and whose literal parts are parts. Such
+// a pattern is never the bare "*", which plainWildcardLeaf handles.
 func wildcardLeaf(v string, parts []string) *expr {
 	first, last := parts[0], parts[len(parts)-1]
 	switch {
@@ -382,8 +383,6 @@ func wildcardLeaf(v string, parts []string) *expr {
 		return newLeaf(leafEquals, first)
 	case len(parts) > 2:
 		return newLeaf(leafGlob, v)
-	case first == "" && last == "":
-		return newLeaf(leafExists, "")
 	case first == "":
 		return newLeaf(leafSuffix, last)
 	case last == "":

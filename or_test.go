@@ -251,3 +251,42 @@ func TestOrSharesConditions(t *testing.T) {
 		t.Errorf("MatchFirst = %v, %v, want 1", id, ok)
 	}
 }
+
+// TestOrExplanation checks how an explanation shows alternatives, as text
+// and as JSON.
+func TestOrExplanation(t *testing.T) {
+	rule := ConditionSet{
+		cond("env", equalsP("prod")),
+		orC(
+			ConditionSet{cond("team", equalsP("shop"))},
+			ConditionSet{cond("severity", equalsP("critical"))},
+		),
+	}
+	e, err := Explain(rule, []Property{prop("env", "prod"), prop("severity", "critical")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `match
+  ✓ env: {"equals":"prod"} matched "prod"
+  ✓ any of:
+    ✗ alternative 1
+      ✗ team: {"equals":"shop"} (absent)
+    ✓ alternative 2
+      ✓ severity: {"equals":"critical"} matched "critical"
+`
+	if got := e.String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantJSON = `{"matched":true,"conditions":[` +
+		`{"path":"env","matched":true,"values":["prod"],"result":{"pattern":{"equals":"prod"},"matched":true,"values":["prod"]}},` +
+		`{"matched":true,"or":[` +
+		`{"matched":false,"conditions":[{"path":"team","matched":false,"absent":true,"result":{"pattern":{"equals":"shop"},"matched":false}}]},` +
+		`{"matched":true,"conditions":[{"path":"severity","matched":true,"values":["critical"],"result":{"pattern":{"equals":"critical"},"matched":true,"values":["critical"]}}]}]}]}`
+	if string(data) != wantJSON {
+		t.Errorf("Marshal =\n%s\nwant\n%s", data, wantJSON)
+	}
+}
