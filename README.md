@@ -11,35 +11,36 @@
 
 # What's new in v2 🚀
 
-v2 replaced the matching engine, and v2.1 and v2.2 built on it:
+v2 is a new matching engine, and everything below came with it:
 
-- ⚡ **Orders of magnitude faster**: rules are compiled into a shared index, so matching time depends on the event and on the rules it matches, and hardly on how many rules there are. On typical rule sets v2 matches 20 to 30 times as fast as v1, and with prefix or `anythingBut` conditions by far more.
+- ⚡ **Fast at any size**: rules are compiled into one shared index, so matching an event depends on the event and on the rules it matches, and hardly on how many rules there are. On typical rule sets v2 matches 20 to 30 times as fast as v1, and with prefix or `anythingBut` conditions far more than that.
 - 🔒 **Lock-free matching**: `Match` never blocks and scales with the number of cores, even while rules are added, replaced or removed.
-- 🪶 **Lean**: a rule takes a few hundred bytes, `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all. No dependencies.
-- ✅ **Precise**: every pattern type follows precisely specified semantics, verified continuously against a reference implementation with differential tests, fuzzing and race tests.
-- ✨ **Modern API**: generic rule identifiers, validation errors that point to the problem, and results in insertion order.
-- 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly and decodes only the values the rules refer to, several times as fast as decoding them first.
+- 🪶 **Lean**: a rule takes a few hundred bytes, `Match` allocates only the slice it returns, and `AppendMatches` nothing at all. No dependencies.
+- ✅ **Precise**: every pattern type follows precisely specified semantics, checked continuously against a reference implementation with differential tests, fuzzing and race tests.
+- ✨ **Modern API**: generic rule identifiers, validation errors that point at the problem, and results in the order the rules were added.
+- 📄 **JSON in, matches out**: `MatchJSON` matches JSON events directly and decodes only the values your rules refer to, several times as fast as decoding them first.
 - 🔄 **Live rule updates**: `AddRule`, `ReplaceRule` and `RemoveRule` change the rules at run time. Replacing is atomic, and nothing ever blocks `Match`.
-- 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` matches present or absent fields, and thousands of ranges on one field are found by binary search.
-- 🧩 **Alternatives in one rule**: `$or` combines whole conditions, including conditions on different paths. Rules are expanded when they are added, so matching them costs nothing extra.
-- ✳️ **Wildcards with escapes**: `\*` matches a literal `*`, and `\\` a backslash.
-- 🎯 **Routing**: `MatchFirst` finds the rule with the highest priority and skips everything that cannot beat it.
+- 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` tests whether a field is there at all, and thousands of ranges on one field are found by binary search.
+- 🧩 **Real logic**: `anyOf`, `allOf` and `anythingBut` nest as deeply as you like, and `$or` combines whole conditions, including conditions on different fields.
+- ✳️ **Wildcards**: `*` anywhere in a pattern, and `\*` for a literal asterisk.
+- 🎯 **Routing**: `MatchFirst` returns the rule with the highest priority and skips everything that cannot beat it.
 - 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not, as text or as JSON for a user interface.
 - 🏁 **Ahead of the field**: on the same 100,000 rules and the same JSON events, hypermatch matches about 5 times as many events per second as [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, and about 45 times as many as [quamina](https://github.com/timbray/quamina), with a fraction of the memory per rule. Rules with wildcards, which slow both of them down to a crawl, are where hypermatch pulls furthest ahead. See the [comparison](#performance).
 
 Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
 
 # Introduction
-Hypermatch is a high-performance Go library that matches events against large sets of rules. Rules are compiled into a shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
-- **Fast**: Hundreds of thousands of rules are no problem, and matching scales with the number of cores. [Benchmarks](#performance)
-- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are being added or removed.
-- **Correct**: The matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
-- **Readable Rule Format**: Write rules in Go or as human-readable JSON objects.
-- **Flexible Rule Syntax**: Supports equals, prefix, suffix, wildcard, numeric comparisons, exists, anything-but, all-of and any-of conditions, which can be nested freely.
-- **No Dependencies**: Only the Go standard library.
+hypermatch matches events against large sets of rules, in Go. Rules are compiled into one shared index, so the time it takes to match an event depends on the event and on the rules it matches, and hardly on how many rules there are.
 
-An event consists of a list of fields, provided as name/value pairs. A rule links these event fields to patterns that determine whether the event matches.
+- **Fast**: hundreds of thousands of rules are no problem. [Benchmarks](#performance)
+- **Concurrent**: `Match` is lock-free and scales with the number of cores, even while rules are added, replaced or removed.
+- **Correct**: the matching semantics are precisely specified and continuously verified against a reference implementation with differential and fuzz tests.
+- **Readable rules**: write them in Go or as plain JSON objects.
+- **Expressive rules**: equals, prefix, suffix, wildcard, numeric comparisons, ranges, `exists`, and `anyOf`, `allOf`, `anythingBut` and `$or` nested freely.
+- **No dependencies**: only the Go standard library.
+
+An event is a list of fields with their values. A rule links those fields to patterns that decide whether the event matches.
 
 ![example](./example.png)
 
@@ -49,7 +50,7 @@ An event consists of a list of fields, provided as name/value pairs. A rule link
 go get github.com/SchwarzDigits/hypermatch/v2
 ```
 
-Hypermatch requires Go 1.24 or later.
+hypermatch requires Go 1.24 or later.
 
 # Quick Start
 
@@ -95,7 +96,7 @@ hypermatch fits wherever many rules have to be checked against a stream of event
 - **Alert routing**: Route alerts from Prometheus, Grafana or any monitoring system to teams, channels and on-call schedules. Each team owns rules like `{"team": {"equals": "shop"}, "severity": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}}`, and `MatchFirst` picks the route with the highest priority.
 - **Event-driven automation**: Trigger workflows, webhooks or functions for the events on a message bus such as Kafka, NATS or SQS, similar to the event patterns of AWS EventBridge. `MatchJSON` works directly on the raw messages.
 - **Subscriptions and notifications**: Let users subscribe to events with their own filters, for example price alerts like `{"symbol": {"equals": "ACME"}, "price": {"lt": 100}}` or "tell me about new issues labeled bug". Hundreds of thousands of subscriptions are no problem.
-- **Feature flags and targeting**: Decide from their attributes which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
+- **Feature flags and targeting**: Decide from their properties which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
 - **IoT and telemetry**: Detect sensor readings outside their normal range with `between`, `lt` and `gt`, per device type or site.
 - **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths or logins from unusual places, with prefix, suffix and wildcard patterns.
 - **Content-based routing**: Route orders, tickets or documents to the queues or services responsible for their content.
@@ -151,14 +152,12 @@ event := []hypermatch.Property{
 
 ## Matching Basics
 
-Rules in Hypermatch are composed of conditions defined by the `ConditionSet` type. An event matches a rule if it matches **all** of its conditions.
+A rule is a `ConditionSet`, and an event matches it if it matches **all** of its conditions. Each condition has
 
-Each condition includes:
+- a **path**, the field of the event it looks at, and
+- a **pattern**, which decides whether the values at that path match.
 
-- **Path**: The field in the event to match against.
-- **Pattern**: The pattern used to match the value at the specified path.
-
-The following rules apply to all conditions:
+These rules hold for every condition:
 
 - **Case-Insensitive Values**: All value comparisons are case-insensitive, including non-ASCII letters (`"ÄRGER"` equals `"ärger"`).
 - **Case-Sensitive Paths**: `"Name"` and `"name"` are different paths, just like keys in JSON.
@@ -235,7 +234,7 @@ The rules and conditions are also expressible as JSON objects. The following JSO
 
 ## Matching syntax
 ### "equals" matching
-The `equals` condition checks if an attribute of the event matches a specified value, case-insensitively.
+The `equals` condition checks if a property of the event matches a specified value, case-insensitively.
 
 ```javascript
 {
@@ -245,13 +244,13 @@ The `equals` condition checks if an attribute of the event matches a specified v
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value is equal to "firing"
 - **String array**: Checks if the array contains an element equal to "firing"
 
 ### "prefix" matching
-The `prefix` condition checks if an attribute starts with a specified prefix, case-insensitively.
+The `prefix` condition checks if a property starts with a specified prefix, case-insensitively.
 
 ```javascript
 {
@@ -261,13 +260,13 @@ The `prefix` condition checks if an attribute starts with a specified prefix, ca
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value begins with "fir"
 - **String array**: Checks if the array contains an element that begins with "fir"
 
 ### "suffix" matching
-The `suffix` condition checks if an attribute ends with a specified suffix, case-insensitively.
+The `suffix` condition checks if a property ends with a specified suffix, case-insensitively.
 
 ```javascript
 {
@@ -277,7 +276,7 @@ The `suffix` condition checks if an attribute ends with a specified suffix, case
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value ends with "ing"
 - **String array**: Checks if the array contains an element that ends with "ing"
@@ -285,7 +284,7 @@ If the attribute value is type of:
 In `equals`, `prefix` and `suffix` patterns, `*` and `\` are ordinary characters.
 
 ### "wildcard" matching
-The `wildcard` condition uses wildcards to match the value of an attribute, ignoring case.
+The `wildcard` condition uses wildcards to match the value of a property, ignoring case.
 
 - Use `*` as a wildcard to match any number of characters (including none).
 - You cannot place wildcards directly next to each other.
@@ -300,9 +299,9 @@ The `wildcard` condition uses wildcards to match the value of an attribute, igno
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
-- **String**: Checks if the value matches the pattern \*parallel requests\*
+- **String**: Checks if the value matches `*parallel requests*`
 - **String array**: Checks if any value in the array matches the pattern
 
 ### "anythingBut" matching
@@ -319,15 +318,15 @@ The `anythingBut` condition negates the match, triggering only if none of the sp
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value is neither "firing" nor starts with "pending"
 - **String array**: Checks if *no* element of the array is "firing" or starts with "pending"
 
-Like every condition, `anythingBut` only matches events that contain the attribute.
+Like every condition, `anythingBut` only matches events that contain the property.
 
 ### "anyOf" matching
-`anyOf` does correspond to a boolean "inclusive-or". It checks multiple conditions and matches if **any** of the conditions are true.
+`anyOf` is a boolean "or": the condition matches if **any** of its patterns matches.
 
 ```javascript
 {
@@ -340,13 +339,13 @@ Like every condition, `anythingBut` only matches events that contain the attribu
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value is either "firing" or "resolved"
 - **String array**: Checks if the array contains an element equal to "firing" or "resolved" or both.
 
 ### "allOf" matching
-`allOf` does correspond to a boolean "and". It checks multiple conditions and matches if **all** the conditions are true.
+`allOf` is a boolean "and": the condition matches only if **all** of its patterns match.
 
 ```javascript
 {
@@ -359,7 +358,7 @@ If the attribute value is type of:
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value matches all conditions, for example `{"allOf": [{"prefix": "web"}, {"suffix": "shop"}]}`
 - **String array**: Checks if the array contains both "shop" and "backend"
@@ -375,7 +374,7 @@ Numeric conditions compare a value as a number: `lt` (less than), `lte` (less th
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value is a number greater than 500
 - **String array**: Checks if the array contains a number greater than 500
@@ -395,13 +394,13 @@ Values are compared as decimal numbers such as `42`, `-1.5`, `.5` or `1e3`, so `
 }
 ```
 
-If the attribute value is type of:
+How it matches:
 
 - **String**: Checks if the value is a number from 500 up to, but not including, 600
 - **String array**: Checks if the array contains such a number. Unlike an `allOf` of two numeric conditions, both bounds must hold for the same element.
 
 ### "exists" matching
-`exists` checks if an attribute is present or absent.
+`exists` checks if a property is present or absent.
 
 ```javascript
 {
@@ -411,8 +410,8 @@ If the attribute value is type of:
 }
 ```
 
-- `{"exists": true}` matches if the event contains the attribute with at least one value, like the wildcard `*`.
-- `{"exists": false}` matches if the event does not contain the attribute, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
+- `{"exists": true}` matches if the event contains the property with at least one value, like the wildcard `*`.
+- `{"exists": false}` matches if the event does not contain the property, or only without values. With `MatchJSON`, `null` counts as absent, too. It must be the whole condition: it cannot be nested in other patterns or combined with other conditions on the same path.
 
 ### Alternatives with "$or"
 An event matches a rule if **all** of its conditions match. `$or` adds alternatives: the rule also needs any one of the condition sets in it to match. Unlike `anyOf`, which compares the values of a single property, `$or` combines whole conditions, including conditions on different paths:
