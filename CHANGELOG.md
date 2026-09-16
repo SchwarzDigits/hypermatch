@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-16
+
 ### Added
 - Functions that build rules in Go with less typing: `Cond`, `Or`, `Equals`, `Prefix`, `Suffix`, `Wildcard`, `AnyOf`, `AllOf`, `AnythingBut`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `NumericEquals`, `Between`, `CIDR`, `Exists` and `Absent`.
 - The `cidr` pattern, which matches IPv4 and IPv6 addresses inside a network such as `10.0.0.0/8`, without allocating.
@@ -75,7 +77,8 @@ The matching engine has been rewritten for correctness, speed and concurrent use
 ### Removed
 - The dependency on `gotest.tools`.
 
-[Unreleased]: https://github.com/SchwarzDigits/hypermatch/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/SchwarzDigits/hypermatch/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.3.0
 [2.2.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.2.0
 [2.1.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.1.0
 [2.0.0]: https://github.com/SchwarzDigits/hypermatch/releases/tag/v2.0.0
