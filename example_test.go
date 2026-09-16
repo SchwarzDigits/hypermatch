@@ -323,3 +323,32 @@ func Example_numbers() {
 	fmt.Println(matches, err)
 	// Output: [server-error exactly-503 slow] <nil>
 }
+
+// Rules for security logs: logins from outside the internal networks, and
+// events of hosts labeled as production, whatever the label is called.
+func Example_securityLogs() {
+	hm := hypermatch.New[string]()
+	add := func(id string, cs ...hypermatch.Condition) {
+		if err := hm.AddRule(id, cs); err != nil {
+			panic(err)
+		}
+	}
+	add("external-login",
+		hypermatch.Cond("action", hypermatch.Equals("login")),
+		hypermatch.Cond("source.ip", hypermatch.AnythingBut(hypermatch.CIDR("10.0.0.0/8"), hypermatch.CIDR("fd00::/8"))),
+	)
+	add("production-host", hypermatch.Cond("host.labels.*", hypermatch.Equals("production")))
+
+	for _, event := range []string{
+		`{"action": "login", "source": {"ip": "10.20.30.40"}, "host": {"labels": {"env": "production"}}}`,
+		`{"action": "login", "source": {"ip": "203.0.113.9"}, "host": {"labels": {"stage": "test"}}}`,
+		`{"action": "login", "source": {"ip": "fd12::1"}, "host": {"labels": {"tier": "Production"}}}`,
+	} {
+		matches, err := hm.MatchJSON([]byte(event))
+		fmt.Println(matches, err)
+	}
+	// Output:
+	// [production-host] <nil>
+	// [external-login] <nil>
+	// [production-host] <nil>
+}

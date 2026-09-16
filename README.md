@@ -101,7 +101,7 @@ hypermatch fits wherever many rules have to be checked against a stream of event
 - **Security and audit logs**: Flag suspicious entries, such as access to sensitive paths with prefix, suffix and wildcard patterns, or logins from outside your networks with `cidr`.
 - **Content-based routing**: Route orders, tickets or documents to the queues or services responsible for their content.
 
-The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions and feature targeting in code.
+The [runnable examples](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2#pkg-examples) show alert routing, subscriptions, feature targeting and security logs in code.
 
 # Documentation
 ## Which Method to Use
@@ -551,7 +551,7 @@ For a user interface, the `Explanation` holds the same information in fields and
 
 # Performance
 
-On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and how long it takes hardly depends on the number of rules. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. Absolute times belong to the machine they were measured on: these are medians of five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
+On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and how long it takes hardly depends on the number of rules. Every workload below uses 100,000 rules, see [bench_test.go](bench_test.go) for their definitions. Absolute times belong to the machine they were measured on: these are medians of at least five runs of `go test -run '^$' -bench . -benchmem` on an Apple M4 Max with Go 1.26.
 
 | Workload | Rules | Time per event | Events per second |
 |---|---|---:|---:|
@@ -561,13 +561,16 @@ On typical rule sets, hypermatch v2 matches 20 to 30 times as fast as v1, and ho
 | wildcard | A different `*-appN-*` wildcard per rule | 0.34 µs | 2.9 million |
 | prefix | A different URL prefix per rule | 0.20 µs | 4.9 million |
 | numeric | 10 latency thresholds per service; 6 rules match each event | 0.34 µs | 2.9 million |
-| anythingbut | 100 exclusion rules per service; 99 match each event | 3.78 µs | 260,000 |
+| cidr | A different network per rule, as a /28 or /30 prefix | 0.15 µs | 6.8 million |
+| labels | 10 rules per service, each looking for a value among all labels with `labels.*` | 0.23 µs | 4.3 million |
+| anythingbut | 100 exclusion rules per service; 99 match each event | 3.75 µs | 270,000 |
+| anythingbut-miss | 100 exclusion rules per service; all of them fail for each event | 0.24 µs | 4.1 million |
 
 - **Parallel matching**: `Match` needs no locks. On 14 cores, the mixed workload reaches 14 million events per second.
 - **Allocations**: `Match` allocates only the slice it returns, and `AppendMatches` does not allocate at all.
 - **JSON events**: `MatchJSON` matches the events of the mixed workload, given as JSON, in 0.65 µs. That is 3.5 times as fast as `json.Unmarshal` followed by `Match` (2.27 µs).
 - **Memory**: A rule takes 301 to 447 bytes.
-- **Adding rules**: Adding 10,000 rules takes 4 to 10 ms.
+- **Adding rules**: Adding 10,000 rules takes 4 to 11 ms.
 
 The [comparison benchmark](_benchmark/benchmark.md) matches events against the same 100,000 rules with hypermatch, [quamina](https://github.com/timbray/quamina) and [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, on a single core. The rules combine `equals`, `anythingBut` and `anyOf` conditions, and every event matches ten of them. With `MatchJSON`, hypermatch gets exactly the same JSON documents as the other two:
 
