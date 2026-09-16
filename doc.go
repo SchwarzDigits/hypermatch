@@ -24,8 +24,9 @@
 // [HyperMatch] is safe for concurrent use, and Match is lock-free. Rules can
 // be added, replaced and removed at any time with [HyperMatch.AddRule],
 // [HyperMatch.ReplaceRule] and [HyperMatch.RemoveRule].
-// [HyperMatch.MatchFirst] returns only the rule with the highest priority,
-// which is the one added first.
+// [HyperMatch.MatchFirst] returns only the first matching rule, the one
+// added earliest, which routes an event if rules are added in the order
+// they should win.
 //
 // Events that arrive as JSON can be matched directly with
 // [HyperMatch.MatchJSON], which decodes only the values rules refer to.

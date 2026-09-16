@@ -23,7 +23,7 @@ v2 is a new matching engine, and everything below came with it:
 - 🔢 **Numbers and missing fields**: `lt`, `lte`, `gt`, `gte`, `eq` and `between` compare values as numbers, `exists` tests whether a field is there at all, and thousands of ranges on one field are found by binary search.
 - 🧩 **Real logic**: `anyOf`, `allOf` and `anythingBut` nest as deeply as you like, and `$or` combines whole conditions, including conditions on different fields.
 - ✳️ **Wildcards**: `*` anywhere in a pattern, and `\*` for a literal asterisk.
-- 🎯 **Routing**: `MatchFirst` returns the rule with the highest priority and skips everything that cannot beat it.
+- 🎯 **Routing**: `MatchFirst` returns only the first matching rule, the one added earliest, and skips everything that cannot come before it. Add the rules in the order they should win, and it routes.
 - 🔍 **Explainable**: `Explain` shows condition by condition why a rule matches an event or not, as text or as JSON for a user interface.
 - 🏁 **Ahead of the field**: on the same 100,000 rules and the same JSON events, hypermatch matches about 5 times as many events per second as [AWS Event Ruler](https://github.com/aws/event-ruler), the library behind Amazon EventBridge, and about 45 times as many as [quamina](https://github.com/timbray/quamina), with a fraction of the memory per rule. Rules with wildcards, which slow both of them down to a crawl, are where hypermatch pulls furthest ahead. See the [comparison](#performance).
 
@@ -93,7 +93,7 @@ func main() {
 
 hypermatch fits wherever many rules have to be checked against a stream of events:
 
-- **Alert routing**: Route alerts from Prometheus, Grafana or any monitoring system to teams, channels and on-call schedules. Each team owns rules like `{"team": {"equals": "shop"}, "severity": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}}`, and `MatchFirst` picks the route with the highest priority.
+- **Alert routing**: Route alerts from Prometheus, Grafana or any monitoring system to teams, channels and on-call schedules. Each team owns rules like `{"team": {"equals": "shop"}, "severity": {"anyOf": [{"equals": "critical"}, {"equals": "warning"}]}}`, and `MatchFirst` picks the first route that matches, so adding the routes in the order they should win makes it a router.
 - **Event-driven automation**: Trigger workflows, webhooks or functions for the events on a message bus such as Kafka, NATS or SQS, similar to the event patterns of AWS EventBridge. `MatchJSON` works directly on the raw messages.
 - **Subscriptions and notifications**: Let users subscribe to events with their own filters, for example price alerts like `{"symbol": {"equals": "ACME"}, "price": {"lt": 100}}` or "tell me about new issues labeled bug". Hundreds of thousands of subscriptions are no problem.
 - **Feature flags and targeting**: Decide from their properties which users get a feature, for example `{"country": {"anyOf": [{"equals": "de"}, {"equals": "at"}]}, "age": {"gte": 18}, "opt_out": {"exists": false}}`.
