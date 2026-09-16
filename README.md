@@ -1,7 +1,6 @@
 [![SIT](https://img.shields.io/badge/SIT-awesome-blueviolet.svg)](https://jobs.schwarz)
 [![CI](https://github.com/SchwarzDigits/hypermatch/actions/workflows/go-test.yml/badge.svg)](https://github.com/SchwarzDigits/hypermatch/actions/workflows/go-test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/SchwarzDigits/hypermatch/badge.svg?branch=main)](https://coveralls.io/github/SchwarzDigits/hypermatch?branch=main)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SchwarzDigits/hypermatch)](https://goreportcard.com/report/github.com/SchwarzDigits/hypermatch)
 [![Go Reference](https://pkg.go.dev/badge/github.com/SchwarzDigits/hypermatch/v2.svg)](https://pkg.go.dev/github.com/SchwarzDigits/hypermatch/v2)
 ![License](https://img.shields.io/github/license/SchwarzDigits/hypermatch)
 ![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/SchwarzDigits/hypermatch)
