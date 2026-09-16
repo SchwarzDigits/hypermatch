@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- Conditions are evaluated against a set of the leaves that matched, instead of searching a sorted list of them. Rule sets with many different `anythingBut` conditions on the same path match up to about twice as fast, and the set is only built for conditions that need it.
+
 ## [2.2.0] - 2026-09-16
 
 ### Added

@@ -136,6 +136,25 @@ var benchWorkloads = []benchWorkload{
 		wantMatches: 99,
 	},
 	{
+		// Exclusions that all fail: every rule excludes the region of the
+		// event as well as one of its own, so the time goes into evaluating
+		// the 100 conditions rather than into the rules that match.
+		name: "anythingbut-miss",
+		rule: func(i, n int) ConditionSet {
+			return ConditionSet{
+				{Path: "region", Pattern: anythingButP(equalsP("moon"), equalsP("r"+strconv.Itoa(i%100)))},
+				{Path: "service", Pattern: equalsP("svc-" + strconv.Itoa(i/100))},
+			}
+		},
+		event: func(i, n int) []Property {
+			return []Property{
+				{Path: "region", Values: []string{"moon"}},
+				{Path: "service", Values: []string{"svc-" + strconv.Itoa((i%n)/100)}},
+			}
+		},
+		wantMatches: 0,
+	},
+	{
 		// Numeric thresholds: ten rules per service with increasing bounds.
 		name: "numeric",
 		rule: func(i, n int) ConditionSet {
