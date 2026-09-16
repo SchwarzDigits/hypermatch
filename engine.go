@@ -145,13 +145,14 @@ type formula struct {
 	subs []formula
 }
 
-// eval reports whether f holds if exactly the leaves in hits (sorted by id)
-// match.
-func (f *formula) eval(hits []*leaf) bool {
+// eval reports whether f holds if exactly the leaves whose bit is set in
+// hits match. Leaves beyond the last word never have a bit, so they count as
+// not matching, which is what the caller means by leaving them out.
+func (f *formula) eval(hits []uint64) bool {
 	switch f.op {
 	case opLeaf:
-		_, found := slices.BinarySearchFunc(hits, f.leaf, func(l *leaf, id uint32) int { return cmp.Compare(l.id, id) })
-		return found
+		w := int(f.leaf >> 6)
+		return w < len(hits) && hits[w]&(1<<(f.leaf&63)) != 0
 	case opAnyOf:
 		for i := range f.subs {
 			if f.subs[i].eval(hits) {
@@ -336,7 +337,8 @@ type scratch struct {
 	fbuf     []byte  // folded values
 	frefs    []vref
 	hits     []*leaf
-	edges    []*edge // stack of edges to follow
+	bits     []uint64 // the ids of hits as a set, for the formulas
+	edges    []*edge  // stack of edges to follow
 	out      []uint32
 	globCur  []*globNode
 	globNext []*globNode
@@ -552,6 +554,20 @@ func (sc *scratch) visit(s *state) {
 	}
 }
 
+// hitBits returns the ids of hits, which are sorted, as a set. The caller
+// clears the words it touched again, so the buffer starts out empty.
+func (sc *scratch) hitBits(hits []*leaf) []uint64 {
+	bits := sc.bits
+	if words := int(hits[len(hits)-1].id>>6) + 1; words > len(bits) {
+		bits = append(bits, make([]uint64, words-len(bits))...)
+		sc.bits = bits
+	}
+	for _, l := range hits {
+		bits[l.id>>6] |= 1 << (l.id & 63)
+	}
+	return bits
+}
+
 func (sc *scratch) evalGroup(g *group, sp *span) {
 	// Load the conditions with anythingBut before looking up the values.
 	// The leaves of a condition are published before the condition, so all
@@ -616,17 +632,39 @@ func (sc *scratch) evalGroup(g *group, sp *span) {
 		slices.SortFunc(cand, func(a, b *edge) int { return cmp.Compare(a.id, b.id) })
 		sc.edges = sc.edges[:start+len(slices.Compact(cand))]
 	}
+
+	// Formulas ask which leaves matched, as a set of their ids. Most groups
+	// have no formula at all, so the set is only built once one needs it.
+	var bits []uint64
 	n := start
 	for _, e := range sc.edges[start:] {
-		if e.f == nil || e.f.eval(hits) {
+		if e.f == nil {
+			sc.edges[n] = e
+			n++
+			continue
+		}
+		if bits == nil && len(hits) > 0 {
+			bits = sc.hitBits(hits)
+		}
+		if e.f.eval(bits) {
 			sc.edges[n] = e
 			n++
 		}
 	}
 	sc.edges = sc.edges[:n]
-	for _, e := range neg {
-		if e.f.eval(hits) {
-			sc.edges = append(sc.edges, e)
+	if len(neg) > 0 {
+		if bits == nil && len(hits) > 0 {
+			bits = sc.hitBits(hits)
+		}
+		for _, e := range neg {
+			if e.f.eval(bits) {
+				sc.edges = append(sc.edges, e)
+			}
+		}
+	}
+	if bits != nil {
+		for _, l := range hits {
+			bits[l.id>>6] = 0
 		}
 	}
 	end := len(sc.edges)
